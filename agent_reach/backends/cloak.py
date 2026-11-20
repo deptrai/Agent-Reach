@@ -34,9 +34,14 @@ def setup() -> dict:
 
 
 if __name__ == "__main__":
-    from cloakbrowser.config import PLATFORM_CHROMIUM_VERSIONS, get_binary_path, get_platform_tag
-    version = PLATFORM_CHROMIUM_VERSIONS[get_platform_tag()]
-    binary = get_binary_path(version)
-    if not binary.is_file():
-        raise SystemExit("CloakBrowser binary is missing")
-    print(json.dumps({"executable": str(binary), "version": version}))
+    # cloakbrowser 0.7.x dropped PLATFORM_CHROMIUM_VERSIONS — locate the installed
+    # binary under the cache dir instead of relying on its internal API.
+    root = Path(os.environ.get("CLOAKBROWSER_CACHE_DIR", str(Path.home() / ".cloakbrowser")))
+    for d in sorted(root.glob("chromium-*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        for rel in ("Chromium.app/Contents/MacOS/Chromium", "chrome", "Chromium", "chrome.exe"):
+            binary = d / rel
+            if binary.is_file():
+                print(json.dumps({"executable": str(binary),
+                                  "version": d.name.removeprefix("chromium-")}))
+                raise SystemExit(0)
+    raise SystemExit("CloakBrowser binary is missing")

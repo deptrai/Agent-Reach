@@ -1,5 +1,5 @@
 ---
-id: 1
+id: 11
 type: epic
 title: "Per-account substrate + contracts"
 parent: initiative-multi-account-farm
@@ -41,7 +41,7 @@ Caps, warm-up, kill-switch, fleet health và fallback — 5 epic sau — đọc-
 
 ## Done when
 
-- Registry tồn tại (file/DB chọn lúc refine — đơn giản nhất thắng): CRUD account, lưu mapping proxy/container/session/age/ledger/status; field `age` được populate lúc onboard (warm-up của epic 3 đọc nó); có schema doc.
+- Registry tồn tại (file/DB chọn lúc refine — đơn giản nhất thắng): CRUD account, lưu mapping proxy/container/session/age/ledger/status; field `age` được populate lúc onboard (warm-up của epic 13 đọc nó); có schema doc.
 - Contract doc trong `docs/` định nghĩa: identity per-run, kill-switch 2 lớp (dispatch soft-check = best-effort pre-flight; netns hard-enforce = epic-fleet-orchestration bake), format ledger rolling-24h, **concurrency/locking model cho ledger đa-writer** (dispatch, fleet manager, drift monitor, fallback lane — vd SQLite WAL/transaction); **ledger chỉ đếm action thành công — attempt tách counter riêng** để outage không đốt caps của account vô tội; **fallback writes (epic-farm-resilience) cũng bắt buộc ghi ledger**; error class `PERSISTED_QUERY_DEAD`/upstream-schema và rule route vào fallback.
 - Dispatch resolve được account_i → env_i/proxy_i từ registry (không cần container — env injection đủ cho phase này).
 - Verify: tạo 2 account giả trên 2 HOME giả lập, chạy tuần tự → mỗi run resolve đúng proxy/env riêng. Song song thật chỉ khi contract đã định nghĩa isolation mechanism (HOME + bridge bind per-account) — hard-isolation verify nằm ở Done-when epic-fleet-orchestration.

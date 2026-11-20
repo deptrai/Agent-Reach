@@ -24,13 +24,14 @@ Farm post được đa platform theo cùng 1 cơ chế, thêm platform mới = v
 
 ## Done when
 
-- Write actions core (post tối thiểu, reply/comment nếu platform cần) verify live trên designated test account cho từng platform: LinkedIn, Reddit, Instagram.
+- Write actions core (post tối thiểu, reply/comment nếu platform cần) verify live trên designated test account cho từng platform: LinkedIn, Reddit, Instagram — test account + session login sẵn do operator cung cấp (provisioning Out of scope); **story đầu mỗi lane = verify login-state trước khi capture mutation**.
 - Mỗi lane có doc-ids trong config hot-reloadable, capture theo pipeline chuẩn, write ghi registry.
 - TikTok: spike kết luận khả thi → lane được build, hoặc descope ghi rõ lý do trong Notes.
 
 ## Boundaries
 
-- Out: Facebook (initiative-facebook-write), caps/kill-switch enforce (epic 3 — lanes này chịu enforcement như mọi write), XActions fallback (epic 6).
+- Out: Facebook (initiative-facebook-write), caps/kill-switch enforce (epic-account-guardrails — lanes này chịu enforcement như mọi write), XActions fallback (epic-farm-resilience).
+- Dependencies authoritative: `tickets/tickets.toml`.
 - Must not change: replay pattern contract của epic 2; mỗi lane write phải đi qua enforcement path.
 - Gate giống epic 2: live verify chỉ trên designated test account không nằm trong farm rotation.
 - Touch point: capture pipeline + doc-id config (epic 2 tạo), registry (epic 1), channels mới `agent_reach/channels/`.
@@ -38,4 +39,4 @@ Farm post được đa platform theo cùng 1 cơ chế, thêm platform mới = v
 ## References
 
 - parent — `initiative-multi-account-farm.md`, Requirement R2
-- architecture — `docs/multi-account-farm-architecture.md` §4a item 2, §4d
+- architecture — `docs/multi-account-farm-architecture.md` §4a item 2, §5 (thứ tự ưu tiên)

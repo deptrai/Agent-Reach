@@ -24,14 +24,16 @@ Người vận hành farm gọi `agent-reach x post|reply|quote|thread` (kèm me
 
 ## Done when
 
-- `agent-reach x post|reply|quote|thread` (+ media nếu pattern cho phép) verify live được trên X.
-- Doc-ids/queryIds nằm trong config/data file hot-reloadable; `agent-reach doctor` (hoặc tương đương) cảnh báo được drift.
+- `agent-reach x post|reply|quote|thread` (+ media nếu pattern cho phép) verify live được trên X từ host với env_i/proxy_i theo contract epic-account-substrate (proof "từ trong container riêng" nằm ở Done-when epic-fleet-orchestration).
+- Doc-ids/queryIds của **toàn bộ persisted queries X đang dùng — kể cả read** (cùng một rotation giết luôn read surface nếu hardcode) — nằm trong config/data file hot-reloadable; `agent-reach doctor` (hoặc tương đương) cảnh báo được drift; probe cùng 1 doc-id từ ≥2 account cho kết quả giống nhau trước khi chốt "global theo platform" (nếu khác → config/monitor phải per-account-variant).
 - Mutation capture pipeline tổng quát hóa từ `docs/fb-mutation-capture.md` dùng được cho ≥2 platform (FB đã có + X).
 - Mọi write ghi vào registry của epic 1 (account nào, lúc nào, action gì).
 
 ## Boundaries
 
-- Out: lane platform khác (epic 5), guardrails (epic 3), container/fleet (epic 4), XActions fallback (epic 6), Facebook write surface (initiative-facebook-write).
+- Out: lane platform khác (epic-platform-lanes), guardrails (epic-account-guardrails), container/fleet (epic-fleet-orchestration), XActions fallback (epic-farm-resilience), Facebook write surface (initiative-facebook-write).
+- Drift delineation: epic này = on-demand config check (`doctor`); proactive probe + alert là của epic-farm-resilience.
+- Dependencies authoritative: `tickets/tickets.toml`.
 - Gate: live verify chỉ trên **designated test account không nằm trong farm rotation** — account chỉ được vào rotation sau khi epic 3 Done-when.
 - Tracer/spike bắt buộc là story đầu: chứng minh X mutation capture được (x-client-transaction-id/bearer/ct0 có lộ qua trang không như DTSG/LSD của FB chưa ai verify). Nếu không khả thi → XActions HTTP lane thăng làm lane chính thay vì fallback, REPLAN initiative.
 - Must not change: read actions của `twitter.py` và các channel read hiện có; `_pace_browser`/cooldown semantics trong `dispatch.py`.

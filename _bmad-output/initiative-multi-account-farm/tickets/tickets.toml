@@ -19,9 +19,9 @@ after = [{ epic = 1, needs = "registry + identity contract để write record đ
 id = 3
 slug = "epic-account-guardrails"
 title = "Per-account guardrails"
-description = "Write caps per-account per-day (ledger trong registry), warm-up ramp-up, kill-switch soft enforce ở dispatch theo contract của epic 1 — verify trên write action đã live sẵn (facebook_post)."
+description = "Write caps per-account per-day (ledger trong registry), warm-up ramp-up, kill-switch soft enforce ở dispatch theo contract của epic 1 — verify trên X write lane của epic 2."
 covers = ["R5", "R6", "R7"]
-after = [{ epic = 1, needs = "registry ledger + kill-switch contract + per-account proxy env" }]
+after = [{ epic = 1, needs = "registry ledger + kill-switch contract + per-account proxy env" }, { epic = 2, needs = "1 live write action làm verify target cho caps/kill-switch (facebook_post thuộc initiative khác, không đếm)" }]
 
 [[epic]]
 id = 4
@@ -29,7 +29,7 @@ slug = "epic-fleet-orchestration"
 title = "Container fleet orchestration"
 description = "Container template per account + netns hard-enforce kill-switch contract + fleet manager health + re-login + ban-rate metrics; populate registry runtime fields; proven scale ≥4 container + runbook 2→N."
 covers = ["R8", "R9", "R10", "R11"]
-after = [{ epic = 1, needs = "registry schema để populate container↔account↔proxy mapping" }, { epic = 3, needs = "cap semantics và kill-switch contract để bake vào netns và health checks" }]
+after = [{ epic = 1, needs = "registry schema để populate container↔account↔proxy mapping" }, { epic = 2, needs = "X write lane để Done-when 'x post từ trong container' verify được" }, { epic = 3, needs = "cap semantics và kill-switch contract để bake vào netns và health checks" }]
 
 [[epic]]
 id = 5

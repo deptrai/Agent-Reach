@@ -38,10 +38,11 @@ Người vận hành farm gọi `agent-reach x post|reply|quote|thread` (kèm me
 - Tracer/spike bắt buộc là story đầu: chứng minh X mutation capture được (x-client-transaction-id/bearer/ct0 có lộ qua trang không như DTSG/LSD của FB chưa ai verify). Nếu không khả thi → XActions HTTP lane thăng làm lane chính thay vì fallback, REPLAN initiative.
 - Must not change: read actions của `twitter.py` và các channel read hiện có; `_pace_browser`/cooldown semantics trong `dispatch.py`.
 - Touch point: `agent_reach/channels/_facebook_write.py` + `_facebook_vars.json` — pattern mẫu; `docs/fb-mutation-capture.md` — capture pipeline mẫu; registry contract của epic 11.
+- Reuse point: capture pipeline phải generalize harness FB đã build (`scripts/capture_fb_mutation.py` + `tests/test_fb_capture.py`, fb story 1.1) — KHÔNG viết pipeline capture mới từ đầu.
 
 ## References
 
 - parent — `initiative-multi-account-farm.md`, Requirements R1, R3, R4
 - architecture — `docs/multi-account-farm-architecture.md` §4a (work items 1, 3, 4), §3 (replay constraint C4)
-- code — `agent_reach/channels/_facebook_write.py`, `agent_reach/channels/twitter.py`, `agent_reach/runtime/dispatch.py`
+- code — `agent_reach/channels/_facebook_write.py`, `agent_reach/channels/twitter.py`, `agent_reach/runtime/dispatch.py`, `scripts/capture_fb_mutation.py` (harness để generalize)
 - docs — `docs/fb-mutation-capture.md`

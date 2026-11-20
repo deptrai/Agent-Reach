@@ -108,7 +108,7 @@ This table reflects the current release.
 | boss | optional | job and JD search | login |
 | xiaoyuzhou | optional | podcast transcription | Groq key |
 | twitter | experimental | search tweets, profiles, user tweets, threads | login |
-| facebook | experimental | search, profiles | login |
+| facebook | experimental | search, profiles, post (default only_me) | login |
 | instagram | experimental | user search, profiles, user posts | login |
 
 - **default**: works right after install; you can remove one, and updates won't add it back.

@@ -1,12 +1,13 @@
 ---
 name: agent-reach
 description: >
-  只读读取各平台内容：搜索、读帖、看评论、取字幕、查行情和职位。
+  读取各平台内容：搜索、读帖、看评论、取字幕、查行情和职位。
   Use when 用户提到或贴出链接：小红书/xiaohongshu、B站/bilibili、Twitter/X、Reddit、
   YouTube（字幕、转录）、GitHub、V2EX、雪球/股票行情、LinkedIn/Boss直聘 职位、
   Instagram、Facebook、小宇宙播客；或说"帮我搜/看看/读一下这个链接"而自带网页搜索/读取不可用、失败或拿不到正文；
   或要安装、加上/去掉某个平台、登录/退出、看状态、更新、卸载 Agent Reach。
-  不做：发帖、评论、点赞、私信等任何写操作；不替用户登录、不索要密码。
+  仅 Facebook 可发帖（post，默认仅自己可见）；评论、点赞、私信等其他写操作一律不做；
+  不替用户登录、不索要密码。
   公开内容优先用 Agent 自带工具，Reach 补缺口。
 metadata:
   homepage: https://github.com/Panniantong/Agent-Reach
@@ -15,7 +16,7 @@ metadata:
 
 # Agent Reach
 
-一个命令读所有平台：`agent-reach`。只读，默认输出一行 JSON。
+一个命令读所有平台：`agent-reach`。读为主（仅 Facebook 支持 post），默认输出一行 JSON。
 
 动手前先说一句"用 agent-reach skill（X 渠道）"。本 skill 被调用后全程有效，以下规则一直适用。
 
@@ -100,6 +101,6 @@ agent-reach read <链接>                   # 按链接自动选渠道
 
 ## 红线
 
-- 只读。发帖、评论、点赞、私信一律不做。
+- 除 Facebook `post` 外全部只读。评论、点赞、私信一律不做；`post` 只发到你自己的主页，默认 only_me，其他受众须用户明示。
 - 不替用户登录，不索要或输出密码、Cookie 等凭据。
 - 普通查询不改依赖、不自动更新。

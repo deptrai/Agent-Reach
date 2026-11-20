@@ -1,13 +1,13 @@
 ---
 name: agent-reach
 description: >
-  Read-only access to platform content: search, read posts, view comments, fetch subtitles, stock quotes and jobs.
+  Read-first access to platform content: search, read posts, view comments, fetch subtitles, stock quotes and jobs.
   Use when the user mentions or pastes a link from Xiaohongshu, Bilibili, Twitter/X, Reddit,
   YouTube (subtitles, transcripts), GitHub, V2EX, Xueqiu/stock quotes, LinkedIn/Boss Zhipin jobs,
   Instagram, Facebook or Xiaoyuzhou podcasts; or says "search / look up / read this link" and your built-in
   web search or fetch is unavailable, fails, or misses the body;
   or wants to install, add/remove a platform, log in/out, check status, update or uninstall Agent Reach.
-  Does not: post, comment, like, message or any other write; never logs in for the user or asks for passwords.
+  Only Facebook can post (audience defaults to only_me); does not comment, like, or message; never logs in for the user or asks for passwords.
   Prefer your own tools for public content; Reach fills the gaps.
 metadata:
   homepage: https://github.com/Panniantong/Agent-Reach
@@ -16,7 +16,7 @@ metadata:
 
 # Agent Reach
 
-One command for every platform: `agent-reach`. Read-only; prints one JSON object by default.
+One command for every platform: `agent-reach`. Read-first (Facebook post supported); prints one JSON object by default.
 
 Before acting, say "using the agent-reach skill (channel X)". Once invoked, these rules apply for the whole session.
 
@@ -101,6 +101,6 @@ Any result with `meta.update` means a newer version exists. Mention it once per 
 
 ## Red lines
 
-- Read only. Never post, comment, like or message.
+- Read-only except `facebook post`. Never comment, like or message; `post` goes to your own timeline, audience defaults to only_me — any other audience needs the user's explicit say.
 - Never log in for the user; never ask for or print passwords, cookies or other credentials.
 - Ordinary queries never change dependencies or update automatically.

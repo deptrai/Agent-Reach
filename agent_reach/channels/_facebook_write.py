@@ -3,13 +3,15 @@
 
 Reads go through `opencli facebook`; writes replay Facebook's own GraphQL
 `ComposerStoryCreateMutation` inside a logged-in facebook.com page of the
-dedicated browser. All transport params (fb_dtsg, lsd, jazoest, spin tokens,
-__user...) are read live from `window.require` on the page — no request
-capture needed (verified: __dyn/__csr/etc. are NOT required by the endpoint).
-The `variables` skeleton in `_facebook_vars.json` (including the
+dedicated browser. Token params (fb_dtsg, lsd, jazoest, spin tokens, __user)
+are read live from `window.require`; the remaining transport params
+(__dyn, __csr, __hsdp, __crn, __req, dpr...) are replayed from a captured
+template in `_facebook_vars.json` — they ARE required on some builds: without
+them FB answers "The GraphQL document with ID … was not found" even when
+doc_id is still valid. The whole file ({params, variables}, including the
 __relay_internal__pv__* provider flags) is captured once from a real composer
-post, sanitized, then re-captured if posts start failing with
-missing_required_variable_value.
+post via scripts/capture_fb_mutation.py, sanitized, then re-captured if posts
+start failing.
 """
 
 from __future__ import annotations
@@ -32,11 +34,17 @@ _DOC_ID = "29221801510819514"
 
 _AUDIENCE = {"only_me": "SELF", "friends": "FRIENDS", "public": "EVERYONE"}
 
-# `variables` skeleton captured from a real composer post; every account or
-# session field inside is a placeholder overwritten at send time.
-_VARS_SKELETON = json.loads(
+# Skeleton captured from a real composer post: {"params": form params replayed
+# verbatim, "variables": Relay variables with placeholders overwritten at send
+# time}. A flat (params-less) file still loads as variables-only.
+_VARS_DOC = json.loads(
     (Path(__file__).with_name("_facebook_vars.json")).read_text(encoding="utf-8")
 )
+if "params" in _VARS_DOC or "variables" in _VARS_DOC:
+    _PARAMS_TEMPLATE = _VARS_DOC.get("params") or {}
+    _VARS_SKELETON = _VARS_DOC.get("variables") or {}
+else:
+    _PARAMS_TEMPLATE, _VARS_SKELETON = {}, _VARS_DOC
 
 # Build params from window.require + fire the post WITHOUT awaiting it — the
 # result lands in window[<key>] under a per-call key so overlapping posts
@@ -62,6 +70,8 @@ vars.input.logging={...(vars.input.logging||{}),composer_session_id:crypto.rando
 vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
 vars.input.actor_id=uid;
 const p=new URLSearchParams();
+const tmpl=__FB_PARAMS;
+for(const k in tmpl)p.set(k,tmpl[k]);
 p.set("av",uid);p.set("__user",uid);p.set("__a","1");
 p.set("__comet_req",site.comet_req||"15");
 p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
@@ -95,6 +105,7 @@ const st=sc.story||{};
 out.storyUrl=st.url||null;
 out.storyId=st.legacy_story_hideable_id||st.id||null;
 out.newPostId=sc.new_post_id||null;
+out.postId=sc.post_id||null;
 }else{out.parsed=false}
 window[KEY]=out;
 })).catch(e=>{window[KEY]={error:String(e)}});
@@ -184,7 +195,8 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
 
     key = f"__fbPostResult_{uuid.uuid4().hex}"
     expr = (
-        _POST_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
+        _POST_JS.replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
+        .replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
         .replace("__FB_AUD", json.dumps(_AUDIENCE[audience]))
         .replace("__FB_DOC", json.dumps(_DOC_ID))
         .replace("__FB_KEY", json.dumps(key))
@@ -248,7 +260,11 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
         story_id = str(out.get("storyId") or "")
         if story_id.isdigit() and out.get("actorId"):
             url = f"https://www.facebook.com/permalink.php?story_fbid={story_id}&id={out['actorId']}"
-    if not url and not (out.get("storyId") or out.get("newPostId")):
+    if not url:
+        post_id = str(out.get("postId") or "")
+        if post_id.isdigit() and out.get("actorId"):
+            url = f"https://www.facebook.com/{out['actorId']}/posts/{post_id}"
+    if not url and not (out.get("storyId") or out.get("newPostId") or out.get("postId")):
         raise ReachError(UPSTREAM_BROKEN, "Mutation returned data but no story — check facebook.com before retrying")
 
     return [

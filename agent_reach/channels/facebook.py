@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Facebook search and profiles through OpenCLI in the shared Agent Reach browser."""
 
+from __future__ import annotations
+
 from ._opencli_site import OpenCLISiteChannel
 from .base import Action, Param
 
@@ -46,6 +48,24 @@ class FacebookChannel(OpenCLISiteChannel):
             # dispatcher serializes it with other browser traffic).
             (("opencli", "_post"),),
         ),
+        Action(
+            "react",
+            "React to a post or comment",
+            (
+                Param("url", "facebook.com post or comment URL"),
+                # Flag form (--type love) per the story's acceptance command;
+                # required=False so argparse accepts --type, Python still
+                # rejects a missing type with BAD_INPUT.
+                Param("type", "like | love | haha | wow | sad | angry", required=False),
+            ),
+            (("opencli", "_react"),),
+        ),
+        Action(
+            "unreact",
+            "Remove your reaction from a post or comment",
+            (Param("url", "facebook.com post or comment URL"),),
+            (("opencli", "_unreact"),),
+        ),
     )
 
     def _opencli_search(self, *, query: str, limit: int, timeout: float) -> list:
@@ -62,3 +82,17 @@ class FacebookChannel(OpenCLISiteChannel):
         from ._facebook_write import facebook_post
 
         return facebook_post(text=text, audience=audience, timeout=timeout)
+
+    def _react(self, *, url: str, type: str | None, timeout: float) -> list:
+        from agent_reach.runtime.result import BAD_INPUT, ReachError
+
+        if type not in ("like", "love", "haha", "wow", "sad", "angry"):
+            raise ReachError(BAD_INPUT, "type must be one of: like, love, haha, wow, sad, angry")
+        from ._facebook_react import facebook_react
+
+        return facebook_react(url=url, reaction=type, timeout=timeout)
+
+    def _unreact(self, *, url: str, timeout: float) -> list:
+        from ._facebook_react import facebook_unreact
+
+        return facebook_unreact(url=url, timeout=timeout)

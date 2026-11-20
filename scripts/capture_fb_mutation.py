@@ -15,8 +15,9 @@ Usage:
 Then do the action once in that browser (click Like, post a comment, ...).
 The script dumps every captured mutation name; matching bodies are parsed,
 sanitized (actor_id -> "0", UUIDs -> zero, epoch timestamps -> 0,
-attribution_id_v2 -> template) and written as a bare `variables` object —
-drop-in compatible with `_facebook_vars.json`.
+attribution_id_v2 -> template) and written as {"params": ..., "variables": ...}
+— the same shape as `_facebook_vars.json`, so the params template survives a
+re-capture instead of silently degrading to variables-only.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ _UUID_RE = re.compile(
 )
 _EPOCH_RE = re.compile(r"^1[0-9]{11,12}$")  # epoch seconds/ms, 2020s-2030s
 _ZERO_UUID = "00000000-0000-0000-0000-000000000000"
-_ID_KEYS = {"actor_id", "__user", "user_id", "uid"}
+_ID_KEYS = {"actor_id", "__user", "user_id", "uid", "av"}
 
 
 def oc(profile: str, session: str, *args: str, timeout: int = 60) -> str:
@@ -181,7 +182,12 @@ def main(argv=None) -> int:
             print(f"    skip {n}: body not readable", file=sys.stderr)
             continue
         parsed = parse_body(body)
-        skeleton = sanitize(parsed["variables"])
+        # Keep the transport params template too — a variables-only skeleton
+        # would leave _PARAMS_TEMPLATE empty and replay without __dyn/__csr/...
+        skeleton = {
+            "params": sanitize(parsed["params"]),
+            "variables": sanitize(parsed["variables"]),
+        }
         out_path = args.out or default_out_name(str(parsed["friendly_name"]))
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(skeleton, fh, indent=2, ensure_ascii=False)

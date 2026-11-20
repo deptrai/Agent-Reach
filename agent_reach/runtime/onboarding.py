@@ -36,7 +36,7 @@ _CAPABILITY_LIMITS = {
     'twitter': ['thread 仅覆盖实际返回的回复；不保证完整评论流，不提供发帖动作。'],
     'xiaohongshu': ['只报告实际读取的正文、已加载评论和回复，不承诺完整导出。'],
     'instagram': ['search 搜索用户；没有任意帖子 read 或独立 comments 动作。'],
-    'facebook': ['当前仅声明 search/profile，不承诺独立帖文读取或评论导出。'],
+    'facebook': ['read 仅覆盖 search/profile；post 为写操作（默认 only_me），须在专用浏览器登录。'],
     'linkedin': ['当前仅声明职位搜索和 JD 读取，不承诺联系人或动态抓取。'],
     'boss': ['当前仅声明职位搜索和 JD 读取；登录不保证平台始终允许访问。'],
     'v2ex': ['回复是否完整须核对分页与实际返回数量。'],

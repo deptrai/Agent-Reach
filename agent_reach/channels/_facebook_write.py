@@ -6,36 +6,45 @@ Reads go through `opencli facebook`; writes replay Facebook's own GraphQL
 dedicated browser. All transport params (fb_dtsg, lsd, jazoest, spin tokens,
 __user...) are read live from `window.require` on the page — no request
 capture needed (verified: __dyn/__csr/etc. are NOT required by the endpoint).
-The `variables` skeleton below (including the __relay_internal__pv__* provider
-flags) is captured once from a real composer post — re-capture if posts start
-failing with missing_required_variable_value.
+The `variables` skeleton in `_facebook_vars.json` (including the
+__relay_internal__pv__* provider flags) is captured once from a real composer
+post, sanitized, then re-captured if posts start failing with
+missing_required_variable_value.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import time
+import uuid
 from pathlib import Path
 
-from agent_reach.runtime.result import NEED_LOGIN, UPSTREAM_BROKEN, ReachError, make_item
+from agent_reach.runtime.result import (
+    NEED_LOGIN,
+    RATE_LIMITED,
+    UPSTREAM_BROKEN,
+    ReachError,
+    make_item,
+)
 
 # Persisted-query id for ComposerStoryCreateMutation (rotates with FB builds).
 _DOC_ID = "29221801510819514"
 
 _AUDIENCE = {"only_me": "SELF", "friends": "FRIENDS", "public": "EVERYONE"}
 
-# `variables` skeleton captured verbatim from a real composer post
-# (audience/text/tokens are overwritten at send time). Kept as a JSON resource
-# so it can be re-captured without touching code.
+# `variables` skeleton captured from a real composer post; every account or
+# session field inside is a placeholder overwritten at send time.
 _VARS_SKELETON = json.loads(
     (Path(__file__).with_name("_facebook_vars.json")).read_text(encoding="utf-8")
 )
 
-# Build params from window.require + fire the post WITHOUT awaiting it —
-# result lands in window.__fbPostResult. The eval returns immediately, so a
-# slow mutation can't hit the CDP socket timeout; retries would duplicate the
-# post. __FB_VARS / __FB_TEXT / __FB_AUD / __FB_DOC are substituted before eval.
+# Build params from window.require + fire the post WITHOUT awaiting it — the
+# result lands in window[<key>] under a per-call key so overlapping posts
+# cannot clobber each other's result. The eval returns immediately, so a slow
+# mutation can't hit the CDP socket timeout; retrying a sent post would
+# duplicate it. __FB_VARS / __FB_AUD / __FB_DOC / __FB_KEY / __FB_TEXT are
+# substituted before eval — __FB_TEXT always LAST, because the user's text
+# could itself contain any of the other sentinel strings.
 _POST_JS = r"""
 (()=>{try{
 const req=window.require;
@@ -50,7 +59,7 @@ vars.input.message.text=__FB_TEXT;
 vars.input.audience={privacy:{allow:[],base_state:__FB_AUD,deny:[],tag_expansion_state:"UNSPECIFIED"}};
 vars.input.idempotence_token=crypto.randomUUID()+"_FEED";
 vars.input.logging={...(vars.input.logging||{}),composer_session_id:crypto.randomUUID()};
-vars.input.client_mutation_id="1";
+vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
 vars.input.actor_id=uid;
 const p=new URLSearchParams();
 p.set("av",uid);p.set("__user",uid);p.set("__a","1");
@@ -64,10 +73,31 @@ p.set("fb_api_caller_class","RelayModern");
 p.set("doc_id",__FB_DOC);
 p.set("server_timestamps","true");
 p.set("variables",JSON.stringify(vars));
-window.__fbPostResult=null;
+const KEY=__FB_KEY;
+window[KEY]=null;
 fetch("/api/graphql/",{method:"POST",credentials:"include",
 headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":"ComposerStoryCreateMutation"},
-body:p.toString()}).then(r=>r.text().then(t=>{window.__fbPostResult={status:r.status,body:t.slice(0,4000)}})).catch(e=>{window.__fbPostResult={error:String(e)}});
+body:p.toString()}).then(r=>r.text().then(t=>{
+const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
+const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
+let j=null;
+try{j=JSON.parse(clean)}catch(e){
+for(const line of clean.split("\n")){
+if(!line.trim())continue;
+try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
+}
+}
+if(j){
+out.parsed=true;
+out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+const sc=(j.data||{}).story_create||{};
+const st=sc.story||{};
+out.storyUrl=st.url||null;
+out.storyId=st.legacy_story_hideable_id||st.id||null;
+out.newPostId=sc.new_post_id||null;
+}else{out.parsed=false}
+window[KEY]=out;
+})).catch(e=>{window[KEY]={error:String(e)}});
 return{sent:true}}catch(e){return{error:String(e)}}})()
 """
 
@@ -125,33 +155,62 @@ def _wait_ready(target_id: str, timeout: float) -> None:
     raise ReachError(UPSTREAM_BROKEN, "facebook.com did not finish loading in the dedicated browser")
 
 
+def _error_message(errors: list) -> str:
+    parts = []
+    for e in errors[:3]:
+        if isinstance(e, dict):
+            parts.append(str(e.get("message") or e.get("summary") or e)[:150])
+        else:
+            parts.append(str(e)[:150])
+    return "; ".join(p for p in parts if p)
+
+
 def facebook_post(*, text: str, audience: str, timeout: float) -> list:
     """Post `text` as a status update in the dedicated browser's FB session."""
     from agent_reach.runtime import session_reuse
 
     session_reuse.prepare("facebook")
+    # One shared deadline for every phase — a fresh budget per phase could
+    # overrun the dispatch timeout and strand the in-flight post.
+    deadline = time.monotonic() + timeout
+
+    def left(cap: float) -> float:
+        return max(1.0, min(deadline - time.monotonic(), cap))
+
     target = _fb_target(create=True)
     if not target:
         raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    _wait_ready(target["id"], min(timeout, 25))
+    _wait_ready(target["id"], left(25))
 
+    key = f"__fbPostResult_{uuid.uuid4().hex}"
     expr = (
         _POST_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
-        .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
         .replace("__FB_AUD", json.dumps(_AUDIENCE[audience]))
         .replace("__FB_DOC", json.dumps(_DOC_ID))
+        .replace("__FB_KEY", json.dumps(key))
+        .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
     )
-    sent = _eval(target["id"], expr, 10)
+
+    # window.require can exist before DTSGInitialData/LSD register on slow
+    # loads — retry `no_tokens` while a user id is present; no uid at all is a
+    # definitive logout.
+    sent = None
+    for _ in range(6):
+        sent = _eval(target["id"], expr, left(10))
+        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
+            time.sleep(1.5)
+            continue
+        break
     if not isinstance(sent, dict) or not sent.get("sent"):
         err = (sent or {}).get("error") if isinstance(sent, dict) else sent
         if err == "no_tokens":
             raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
         raise ReachError(UPSTREAM_BROKEN, f"Post could not be sent: {err!r}")
 
+    poll_expr = f"window[{json.dumps(key)}]||null"
     out = None
-    deadline = time.monotonic() + min(timeout, 30)
     while time.monotonic() < deadline:
-        out = _eval(target["id"], "window.__fbPostResult||null", 8)
+        out = _eval(target["id"], poll_expr, left(8))
         if out:
             break
         time.sleep(0.7)
@@ -162,19 +221,41 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
         )
     if out.get("error"):
         raise ReachError(UPSTREAM_BROKEN, f"Post failed in page: {out['error'][:200]}")
-    body = out.get("body") or ""
-    low = body.lower()
-    if any(w in low for w in ("login_form", "checkpoint", "not logged")):
-        raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
-    if '"errors"' in body or ("story_create" not in body and '"data"' not in body):
-        raise ReachError(UPSTREAM_BROKEN, f"ComposerStoryCreateMutation failed: {body[:300]}")
-    m = re.search(r'"url":"([^"]*facebook\.com[^"]*)"', body)
-    url = m.group(1).replace("\\/", "/") if m else None
+
+    status = out.get("status")
+    if status == 429:
+        raise ReachError(RATE_LIMITED, "Facebook rate-limited the post — slow down before retrying")
+    if isinstance(status, int) and status >= 500:
+        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the post mutation")
+
+    if not out.get("parsed"):
+        head = (out.get("body") or "").lower()
+        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
+            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
+        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
+
+    errors = out.get("errors") or []
+    if errors:
+        message = _error_message(errors)
+        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
+            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
+        raise ReachError(UPSTREAM_BROKEN, f"ComposerStoryCreateMutation failed: {message}")
+
+    # Prefer the story permalink; fall back to building one from the numeric
+    # story id — never to the actor's profile URL.
+    url = out.get("storyUrl")
+    if not url:
+        story_id = str(out.get("storyId") or "")
+        if story_id.isdigit() and out.get("actorId"):
+            url = f"https://www.facebook.com/permalink.php?story_fbid={story_id}&id={out['actorId']}"
+    if not url and not (out.get("storyId") or out.get("newPostId")):
+        raise ReachError(UPSTREAM_BROKEN, "Mutation returned data but no story — check facebook.com before retrying")
+
     return [
         make_item(
             title=text[:120],
-            url=url or "https://www.facebook.com/me",
+            url=url,
             text=f"Posted ({audience})",
-            raw={"status": out.get("status"), "audience": audience, "url": url},
+            raw={"status": status, "audience": audience, "url": url, "newPostId": out.get("newPostId")},
         )
     ]

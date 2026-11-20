@@ -170,3 +170,22 @@ def test_github_missing_repo_and_readme_failures_stay_errors(monkeypatch, status
     assert out['error']['code'] == code
     assert out['items'] == []
     assert len(calls) == (1 if status == 404 else 2)
+
+
+@pytest.mark.parametrize("jar,code", [
+    ({"cookies": []}, "NEED_LOGIN"),
+    ({"cookies": [{"name": "c_user", "domain": ".facebook.com"}]}, "UPSTREAM_BROKEN"),
+    ({"cookies": [{"name": "c_user", "domain": ".example.com"}]}, "NEED_LOGIN"),
+    (None, "UPSTREAM_BROKEN"),  # unreadable cookies are no proof of a logout
+])
+def test_facebook_failure_without_c_user_asks_for_login(monkeypatch, jar, code):
+    from agent_reach.channels import _opencli_site, facebook
+    from agent_reach.runtime import browser, cdp
+    def broken(*a, **k):
+        raise ReachError("UPSTREAM_BROKEN", "OpenCLI: Error: HTTP 404")
+    monkeypatch.setattr(_opencli_site, "opencli_call", broken)
+    monkeypatch.setattr(browser, "is_running", lambda: True)
+    monkeypatch.setattr(cdp, "call", lambda method, *a, **k: jar)
+    with pytest.raises(ReachError) as exc:
+        facebook.FacebookChannel()._opencli_search(query="nasa", limit=2, timeout=5)
+    assert exc.value.code == code

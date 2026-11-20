@@ -1,5 +1,5 @@
 ---
-id: 3
+id: 4
 type: epic
 title: "Container fleet orchestration"
 parent: initiative-multi-account-farm
@@ -16,26 +16,27 @@ risk: high
 
 ## Description
 
-Hạ tầng vận hành thật của farm: container template (Docker/Podman) chạy 1 account với HOME riêng, `~/.agent-reach` volume riêng, `REACH_BROWSER_PROXY` riêng, network namespace riêng để bridge `127.0.0.1:19825` không đụng nhau; phía trên là fleet manager poll `agent-reach check` JSON để biết browser/proxy/session/cooldown per container, automation mở lại login window khi `NEED_LOGIN`, và metrics ban-rate tối giản.
+Hạ tầng vận hành thật của farm: container template (Docker/Podman) chạy 1 account với HOME riêng, `~/.agent-reach` volume riêng, proxy riêng, network namespace riêng để bridge `127.0.0.1:19825` không đụng nhau và **netns hard-enforce kill-switch contract** (zero egress ngoài proxy_i — contract ở epic 1); phía trên là fleet manager poll `agent-reach check` JSON per container populate registry, automation mở lại login window khi `NEED_LOGIN`, và metrics ban-rate tối giản.
 
 ## Outcome
 
-Chủ farm nhân bản 1 account thành N container bằng template, nhìn 1 dashboard biết container nào đỏ và vì sao, account hết session được mở login window đúng chỗ thay vì mò tay từng cái.
+Chủ farm nhân bản 1 account thành N container bằng template, nhìn 1 chỗ biết container nào đỏ và vì sao, account hết session được mở login window đúng chỗ — và farm chứng minh được mình scale thật, không dừng ở demo 2 cái.
 
 ## Done when
 
-- Container template chạy được `agent-reach check` + `x post` từ trong container riêng với proxy riêng, resource cap ~1.5GB RAM, proxy kill-switch bake vào network layer (proxy chết → không có route ra ngoài).
-- ≥2 container chạy song song trên 1 host không đụng bridge/proxy/session của nhau; fleet manager hiển thị health per container.
+- Container template chạy được `agent-reach check` + `x post` từ trong container riêng với proxy riêng, resource cap ~1.5GB RAM; netns bake kill-switch contract của epic 1 (proxy chết → không có route ra ngoài — hard guarantee, không chờ dispatch check).
+- **≥4 container chạy song song trên 1 host** không đụng bridge/proxy/session của nhau + runbook nhân bản 2→N trong `docs/` — gate scale thật của initiative đứng ở đây.
+- Fleet manager hiển thị health per container; runtime fields của registry (container↔account↔proxy↔session↔ban status) được populate.
 - `NEED_LOGIN` trên 1 container → job mở login window trong đúng container đó.
-- Template pin OpenCLI/Agent-Reach version tại build time (C7) — upgrade = rebuild có kiểm soát, không auto-update trong container đang chạy.
 - Metrics per-account (action/ngày, RATE_LIMITED, PLATFORM_BLOCKED, ban) ghi ra nơi đọc được, dashboard tối giản hoặc output có cấu trúc.
+- Template pin OpenCLI/Agent-Reach version tại build time (C7) — upgrade = rebuild có kiểm soát, không auto-update trong container đang chạy.
 
 ## Boundaries
 
-- Out: write lanes (epic 1), logic caps/kill-switch check trong dispatch (epic 2 — epic này bake contract đó vào infra), XActions fallback (epic 4).
+- Out: write lanes (epic 2), logic caps/kill-switch check trong dispatch (epic 3 — epic này bake contract đó vào netns, không viết lại policy), registry schema (epic 1 — epic này chỉ populate), XActions fallback (epic 6 — chỉ cung cấp env per-account).
 - Procurement proxy pool và nâng RAM server là việc con người — hitl entry khi plan stories.
-- Must not change: bridge contract `127.0.0.1:19825` (tách bằng netns, không đổi port/config trong code).
-- Touch point: `agent_reach/runtime/onboarding.py` (login flow designed-for-agent), `browser_watcher.py` (proxy launch, CloakBrowser), `bridge.py` (singleton → netns), `runtime/tools.py` (version pin C7).
+- Must not change: bridge contract `127.0.0.1:19825` (tách bằng netns, không đổi port/config trong code); registry schema của epic 1.
+- Touch point: `agent_reach/runtime/onboarding.py` (login flow designed-for-agent), `browser_watcher.py` (proxy launch, CloakBrowser), `bridge.py` (singleton → netns), `runtime/tools.py` (version pin C7), registry của epic 1.
 
 ## References
 

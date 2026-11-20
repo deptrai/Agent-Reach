@@ -1,5 +1,5 @@
 ---
-id: 2
+id: 3
 type: epic
 title: "Per-account guardrails"
 parent: initiative-multi-account-farm
@@ -16,25 +16,26 @@ risk: medium
 
 ## Description
 
-Lớp chính sách per-account gắn vào dispatch, chạy trước mọi write action: quota theo ngày theo action-class (model `action-caps` rolling-24h của XActions), lịch warm-up ramp-up cho account mới, và proxy kill-switch verify exit IP trước khi action — fail-closed `PLATFORM_BLOCKED`, không fallback direct. Đây là policy layer cross-platform, không phải một lane.
+Lớp chính sách per-account gắn vào dispatch, chạy trước **mọi action** (không chỉ write — read qua proxy chết cũng leak IP nhà y hệt): quota theo ngày theo action-class đọc ledger rolling-24h từ registry, lịch warm-up ramp theo tuổi account trong registry, và kill-switch soft enforce theo contract của epic 1 — **zero egress ngoài proxy_i**, dispatch là best-effort pre-flight, netns hard-enforce là của epic 4.
 
 ## Outcome
 
-Một account mới vào farm không thể tự bắn mình: vượt cap bị refuse trước khi gọi platform, proxy chết thì action dừng thay vì leak IP nhà, hành vi ramp-up tự động thay vì post burst.
+Một account mới vào farm không thể tự bắn mình: vượt cap bị refuse trước khi gọi platform, proxy chết thì action dừng thay vì leak IP nhà, tần suất action ramp dần theo tuổi thay vì burst.
 
 ## Done when
 
-- Write caps per-account per-action-class per-day enforce được trong dispatch, env-configurable, ledger rolling-24h persist được per account.
-- Kill-switch check verify exit IP = proxy của account trước mọi action; proxy chết → `PLATFORM_BLOCKED`, không packet nào đi direct.
-- Warm-up schedule áp dụng được cho account mới (hành vi bị giới hạn theo ngày tuổi của account).
-- Verify trên ≥1 account thật: cố tình vượt cap → refuse; kill proxy → fail-closed.
+- Write caps per-account per-action-class per-day enforce được trong dispatch, env-configurable, ledger rolling-24h đọc-ghi qua registry của epic 1.
+- Kill-switch: dispatch refuse + `PLATFORM_BLOCKED` khi proxy của account fail check, **không** hành nào đi direct; semantics theo đúng contract doc epic 1 (zero egress — không so IP tuyệt đối vì residential rotate).
+- Warm-up: caps chặt dần theo tuổi account (ngày tuổi từ registry; chỉ điều chỉnh tần suất action — không đòi lane like/follow chưa tồn tại).
+- Verify trên write action đã live sẵn (`facebook_post` + X lane nếu epic 2 xong trước): cố tình vượt cap → refuse; kill proxy → fail-closed.
+- Refusal phải hiện lên operator (log/status rõ ràng — không âm thầm nuốt).
 
 ## Boundaries
 
-- Out: write lanes tự thân (epic 1), container networking thật (epic 3 — epic này chỉ định nghĩa kill-switch *contract* mà container bake vào), metrics/dashboard (epic 3).
-- Hitl: cần ≥1 proxy thật trong dev env để verify fail-closed — 1 cái là đủ, không chờ cả proxy pool của epic 3.
+- Out: write lanes tự thân (epic 2), netns/container hard-enforce (epic 4 — epic này chỉ soft enforce ở dispatch theo contract), metrics/dashboard (epic 4).
 - Must not change: `_pace_browser`, `RATE_LIMIT_SECONDS`, `BACKEND_PAUSE_SECONDS` semantics sẵn có — caps per-account bổ sung lớp trên, không thay thế.
-- Touch point: `agent_reach/runtime/dispatch.py` — chỗ enforce; XActions `src/mcp/action-caps.js` — model tham chiếu.
+- Hitl: cần ≥1 proxy thật trong dev env để verify fail-closed — 1 cái là đủ, không chờ cả proxy pool của epic 4.
+- Touch point: `agent_reach/runtime/dispatch.py` — chỗ enforce; registry + kill-switch contract của epic 1; XActions `src/mcp/action-caps.js` — model ledger tham chiếu.
 
 ## References
 

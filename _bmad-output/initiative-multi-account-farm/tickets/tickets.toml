@@ -2,31 +2,47 @@
 
 [[epic]]
 id = 1
-slug = "epic-write-lanes"
-title = "Write lanes replay mutation"
-description = "Doc-ids externalized ra config hot-reloadable; `agent-reach x post|reply|quote|thread` + media verify live qua replay; capture pipeline chuẩn hóa mở đường cho LinkedIn/Reddit/Instagram/TikTok."
-covers = ["R1", "R2", "R3", "R4"]
+slug = "epic-account-substrate"
+title = "Per-account substrate + contracts"
+description = "Nền tảng chung: registry per-account (account↔proxy↔container↔session↔tuổi↔ledger↔status), contract danh tính per-run, và kill-switch contract 'zero egress ngoài proxy_i, fail-closed' — mọi epic sau đọc-ghi cùng 1 source of truth."
+covers = ["R15"]
 
 [[epic]]
 id = 2
-slug = "epic-account-guardrails"
-title = "Per-account guardrails"
-description = "Write caps per-account per-day, warm-up ramp-up, proxy kill-switch fail-closed — enforce trong dispatch trước mọi write mà epic 1 tạo ra."
-covers = ["R5", "R6", "R7"]
-after = [{ epic = 1, needs = "X write actions để caps và kill-switch có cái để gate" }]
+slug = "epic-write-lanes"
+title = "Write lanes replay mutation"
+description = "Doc-ids externalized ra config hot-reloadable; `agent-reach x post|reply|quote|thread` + media verify live qua replay trên designated test account; capture pipeline chuẩn hóa."
+covers = ["R1", "R3", "R4"]
+after = [{ epic = 1, needs = "registry + identity contract để write record đúng per-account từ ngày đầu" }]
 
 [[epic]]
 id = 3
-slug = "epic-fleet-orchestration"
-title = "Container fleet orchestration"
-description = "Container template per account + fleet manager health + re-login automation + ban-rate metrics; bake kill-switch contract của epic 2 vào container networking và health model."
-covers = ["R8", "R9", "R10", "R11"]
-after = [{ epic = 2, needs = "kill-switch contract và cap semantics để bake vào container template và health checks" }]
+slug = "epic-account-guardrails"
+title = "Per-account guardrails"
+description = "Write caps per-account per-day (ledger trong registry), warm-up ramp-up, kill-switch soft enforce ở dispatch theo contract của epic 1 — verify trên write action đã live sẵn (facebook_post)."
+covers = ["R5", "R6", "R7"]
+after = [{ epic = 1, needs = "registry ledger + kill-switch contract + per-account proxy env" }]
 
 [[epic]]
 id = 4
+slug = "epic-fleet-orchestration"
+title = "Container fleet orchestration"
+description = "Container template per account + netns hard-enforce kill-switch contract + fleet manager health + re-login + ban-rate metrics; populate registry runtime fields; proven scale ≥4 container + runbook 2→N."
+covers = ["R8", "R9", "R10", "R11"]
+after = [{ epic = 1, needs = "registry schema để populate container↔account↔proxy mapping" }, { epic = 3, needs = "cap semantics và kill-switch contract để bake vào netns và health checks" }]
+
+[[epic]]
+id = 5
+slug = "epic-platform-lanes"
+title = "Platform lanes mở rộng"
+description = "LinkedIn → Reddit → Instagram theo thứ tự ưu tiên farm, mỗi lane đi qua capture pipeline + doc-id config của epic 2; TikTok = spike quyết định riêng (chưa có cả read channel)."
+covers = ["R2"]
+after = [{ epic = 2, needs = "replay pattern + capture pipeline + doc-id config đã chứng minh trên X" }]
+
+[[epic]]
+id = 6
 slug = "epic-farm-resilience"
 title = "Farm resilience"
-description = "XActions HTTP fallback, incident playbook, doc-id drift monitor — che chở các lane epic 1 đã build trên nền config epic 1 externalize."
+description = "XActions HTTP fallback (egress qua proxy account, không bypass guardrails), incident playbook walk-through trước mốc 20 account, host-level doc-id drift monitor."
 covers = ["R12", "R13", "R14"]
-after = [{ epic = 1, needs = "externalized doc-id config để probe drift và write lanes để fallback che chở" }, { epic = 2, needs = "enforcement path caps/kill-switch để fallback writes không bypass guardrails" }]
+after = [{ epic = 2, needs = "externalized doc-id config để probe drift và write lanes để fallback che chở" }, { epic = 3, needs = "enforcement path caps/kill-switch để fallback writes không bypass guardrails" }, { epic = 4, needs = "env per-account trong container template để wire fallback egress" }]

@@ -27,7 +27,7 @@ Farm degrade graceful thay vì chết đứng: 1 mutation gãy → account vẫn
 - Fallback path hoạt động: 1 mutation replay gãy (hoặc lane chưa có) → action route về `xactions-mcp` HTTP lane với kết quả verify được; write qua fallback vẫn đi qua enforcement caps/kill-switch của epic 2 (không bypass).
 - Fallback egress đi qua proxy của account (theo C3) — wiring phía lane nằm ở epic này, dựa trên env per-account mà container template epic 3 cung cấp; không accept degrade direct-leak-IP.
 - Doc-id drift monitor chạy host-level (doc-id là global theo platform, không per-account → 1 cron là đủ); kill 1 doc-id giả lập → alert phát ra.
-- Incident playbook tồn tại trong docs, đã walk-through ≥1 scenario trước khi farm vượt 20 account.
+- Incident playbook tồn tại trong docs, đã walk-through ≥1 scenario — land đủ sớm trong program (không đợi epic cuối hàng xong mới viết, vì farm vượt 20 account ngay sau khi epic 4 scale).
 
 ## Boundaries
 

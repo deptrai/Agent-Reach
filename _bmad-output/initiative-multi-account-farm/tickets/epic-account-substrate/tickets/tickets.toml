@@ -1,0 +1,90 @@
+# Stories của epic-account-substrate — build order theo thứ tự bảng.
+# Tracer = entry 1 (thinnest path: CLI → registry → filesystem).
+
+[[entry]]
+id = 1
+type = "story"
+title = "Farm registry scaffold"
+description = "`agent-reach farm account add <name> --proxy <url>` init SQLite WAL registry tại `~/.agent-reach/farm/registry.db`, tạo HOME skeleton `accounts/<name>/`, ghi row (proxy, age=now, ban_status=new); `farm account list` trả JSON."
+verify = "`farm account add test1 --proxy http://p1` rồi `farm account list` in row JSON đủ field."
+covers = ["R1", "R2"]
+after = []
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Farm account contract doc"
+description = "`docs/farm-account-contract.md`: identity per-run (REACH_ACCOUNT→registry→env), kill-switch 2 lớp (dispatch soft best-effort / netns hard của epic-fleet-orchestration), ledger rolling-24h + concurrency (WAL, chỉ đếm success, attempts tách, fallback ghi ledger), error class PERSISTED_QUERY_DEAD + route rule, schema doc."
+verify = "Doc tồn tại và đủ 5 phần checklist contract (identity, kill-switch, ledger, error class, schema)."
+covers = ["R3"]
+after = [1]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Farm account env resolve"
+description = "`farm account env <name>` trả env dict `{HOME=<account dir>, REACH_BROWSER_PROXY=<proxy>, REACH_ACCOUNT=<name>}` — path resolve dùng chung cho dispatch và container sau này."
+verify = "env của 2 account khác nhau trả đúng từng giá trị; account không tồn tại → NEED_SETUP."
+covers = ["R2", "R4"]
+after = [1]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Dispatch account resolve"
+description = "Dispatch đọc `REACH_ACCOUNT` → registry lookup → env áp vào action run (HOME_i → session/state đúng dir, REACH_BROWSER_PROXY_i); thiếu/unknown → NEED_SETUP rõ, không silent HOME mặc định."
+verify = "Chạy 1 read action với REACH_ACCOUNT=test1 → state rơi vào HOME_i; REACH_ACCOUNT=kotontai → NEED_SETUP."
+covers = ["R4"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Farm ledger"
+description = "Table `actions_log(account, ts, action_class, outcome)` + `record_action` API + query rolling-24h chỉ đếm outcome success (attempts counter riêng) + `farm account ledger <name>` JSON."
+verify = "Ghi 3 success + 2 fail cho test1 → ledger 24h trả success=3, attempts=5."
+covers = ["R5"]
+after = [1, 2]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Persisted-query-dead error class"
+description = "`PERSISTED_QUERY_DEAD` trong `result.py` + envelope mapping; error path raise nó khi nhận persisted-query/upstream-schema signal theo contract (route rule chỉ là contract — routing thật của epic-farm-resilience)."
+verify = "Error path với persisted-query signal → envelope error.code = PERSISTED_QUERY_DEAD; semantics RATE_LIMITED/PLATFORM_BLOCKED không đổi."
+covers = ["R6"]
+after = [2]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Refactor sweep"
+description = "Cleanup-only cuối epic: scope chốt lúc start từ plans + review findings epic đã defer; scope mới phát sinh → story mới, không nhét vào sweep."
+verify = "Diff sweep không thêm behavior mới; test suite còn xanh."
+covers = []
+after = [4, 5, 6]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 8
+type = "story"
+title = "Farm verify e2e"
+description = "Pytest e2e: 2 account giả trên 2 HOME giả lập, chạy tuần tự — env resolve tách biệt, dispatch ghi state đúng HOME, ledger đếm đúng per account."
+verify = "Suite chạy xanh: account A không thấy state/proxy/ledger của B."
+covers = ["R7"]
+after = [7]
+hitl = false
+risk = "low"

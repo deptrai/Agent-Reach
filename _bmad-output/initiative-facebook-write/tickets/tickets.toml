@@ -1,0 +1,17 @@
+# A container's agreed children, in its tickets/ folder; tickets.py ignores unknown keys.
+# Table order is build order. `id` is permanent, never reused.
+
+[[epic]]
+id = 1
+slug = "epic-facebook-write-actions"
+title = "Facebook write actions"
+description = "react/unreact, comment create/delete, post edit/delete và share hoạt động qua mutation replay trong dedicated browser; capture harness được xây dựng; docs khớp thực tế."
+covers = ["R1", "R2", "R3", "R4", "R6", "R7"]
+
+[[epic]]
+id = 2
+slug = "epic-messenger-write"
+title = "Messenger send"
+description = "Web DM send được chứng minh replayable hoặc documented non-feasible; nếu replayable, `facebook message` gửi và verify được tin nhắn."
+covers = ["R5", "R6", "R7"]
+after = [{ epic = 1, needs = "capture harness (story 1.1) và replay helpers" }]

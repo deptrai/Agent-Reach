@@ -1,0 +1,72 @@
+# Build order. `id` is permanent, never reused.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Mutation capture harness"
+description = "Script/helper capture bất kỳ /api/graphql mutation body từ dedicated browser thành skeleton JSON tái dùng: arm interceptor qua CDP eval, người dùng thực hiện action một lần, dump request body có friendly name, sanitize (xoá actor_id/uuid/session fields) và lưu dạng *_vars.json. Kèm doc ngắn về quy trình re-capture khi doc_id rotate."
+verify = "Capture một mutation thật (ví dụ like) tạo ra skeleton JSON load được và pass test sanitize."
+covers = ["R5"]
+after = []
+hitl = true
+risk = "medium"
+
+[[entry]]
+id = 2
+type = "story"
+title = "facebook react / unreact"
+description = "Action `facebook react <post-or-comment-url> --type like|love|haha|wow|sad|angry` và `facebook unreact <url>`; capture mutation reaction thật, skeleton mới, replay helpers; unit tests theo pattern test_facebook_write.py."
+verify = "agent-reach facebook react <url> --type love hiển thị reaction trên facebook.com; unreact gỡ được."
+covers = ["R1", "R5"]
+after = [1]
+risk = "low"
+
+[[entry]]
+id = 3
+type = "story"
+title = "facebook comment create + delete"
+description = "Action `facebook comment <post-url> \"text\"` tạo comment và xoá comment của mình qua id hoặc URL; skeleton comment mutations; unit tests."
+verify = "Comment xuất hiện rồi bị xoá trên post thật."
+covers = ["R2", "R5"]
+after = [1]
+risk = "low"
+
+[[entry]]
+id = 4
+type = "story"
+title = "facebook post edit + delete"
+description = "Action edit text của own post và delete own post qua story id hoặc permalink; delete có guard (yêu cầu flag xác nhận hoặc chống gọi nhầm); skeleton edit/delete mutations; unit tests."
+verify = "Một test post trên timeline của mình được edit rồi delete end-to-end."
+covers = ["R3", "R5"]
+after = [1]
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "facebook share"
+description = "Action `facebook share <post-url> [--text ...] [--audience only_me|friends|public]` share lên timeline mình, audience mặc định only_me; skeleton share mutation; unit tests."
+verify = "Shared story xuất hiện trên timeline của mình với đúng audience."
+covers = ["R4", "R5"]
+after = [1]
+risk = "low"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Write-surface docs update"
+description = "SKILL.md (vi + en), README cập nhật mô tả đầy đủ write verbs đã ship và safety defaults; gỡ wording 'single write exception' cũ."
+verify = "Docs liệt kê mọi write verb thật; không còn claim read-only nào mâu thuẫn."
+covers = ["R6"]
+after = [2, 3, 4, 5]
+risk = "low"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Refactor sweep"
+description = "Cleanup only: dedupe scaffolding replay giữa các mutations (chung hoá poll/error-map/skeleton loading), settle deferred findings từ reviews của các story trước."
+verify = "Pytest suite xanh; không đổi behaviour; diff thuần refactor."
+covers = []
+after = [2, 3, 4, 5, 6]
+risk = "low"

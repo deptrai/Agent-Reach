@@ -1,0 +1,33 @@
+# Build order. `id` is permanent, never reused.
+
+[[entry]]
+id = 1
+type = "spike"
+title = "Messenger send transport"
+description = "Xác định cách facebook.com/messenger.com gửi DM (GraphQL mutation, MQTT/LSPlatform sync-sequence, hay transport khác) và khả năng replay từ page context trong dedicated browser; dùng capture harness của epic-facebook-write-actions."
+verify = "Verdict bằng văn bản nêu rõ cơ chế send và tính replayable; nếu replayable thì kèm mutation name/doc_id + ví dụ request."
+covers = ["R1"]
+after = ["1.1"]
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 2
+type = "story"
+title = "facebook message send"
+description = "Action `facebook message <user-id-or-thread> \"text\"` qua cơ chế spike đã chứng minh; replay helpers + unit tests theo pattern test_facebook_write.py."
+verify = "Tin nhắn gửi qua CLI xuất hiện trong thread trên facebook.com."
+covers = ["R1", "R2"]
+after = [1]
+risk = "high"
+unknown = "Spike Story 1 chưa trả lời transport có replayable không — entry bị chặn tới khi có verdict."
+
+[[entry]]
+id = 3
+type = "story"
+title = "Messenger docs hoặc descope note"
+description = "Nếu send ship: docs mô tả verb + giới hạn (text-only DM). Nếu spike chứng minh non-replayable: ghi descope + lý do kỹ thuật + fallback (opencli browser automation) vào docs."
+verify = "Docs phản ánh đúng kết quả spike, một trong hai hướng."
+covers = ["R2", "R3"]
+after = [1]
+risk = "low"

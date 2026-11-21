@@ -25,19 +25,24 @@ import json
 import re
 import time
 import urllib.parse
-import uuid
-from pathlib import Path
 
 from agent_reach.runtime.result import (
     BAD_INPUT,
-    NEED_LOGIN,
-    RATE_LIMITED,
     UPSTREAM_BROKEN,
     ReachError,
     make_item,
 )
 
-from ._facebook_write import _error_message, _eval, _fb_target, _wait_ready
+from ._facebook_write import (
+    _eval,
+    _fb_target,
+    _result_key,
+    _wait_ready,
+    classify_result,
+    load_skeleton,
+    prepare_facebook,
+    send_mutation,
+)
 
 _DOC_ID = "27646120298312844"
 _FRIENDLY = "CometUFIFeedbackReactMutation"
@@ -53,14 +58,7 @@ _REACTION_IDS = {
     "angry": "444813342392137",
 }
 
-_VARS_DOC = json.loads(
-    (Path(__file__).with_name("_fb_react_vars.json")).read_text(encoding="utf-8")
-)
-if "params" in _VARS_DOC or "variables" in _VARS_DOC:
-    _PARAMS_TEMPLATE = _VARS_DOC.get("params") or {}
-    _VARS_SKELETON = _VARS_DOC.get("variables") or {}
-else:
-    _PARAMS_TEMPLATE, _VARS_SKELETON = {}, _VARS_DOC
+_PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_fb_react_vars.json")
 
 _FB_HOST_RE = re.compile(r"(^|\.)(facebook\.com|fb\.com|fb\.watch)$", re.IGNORECASE)
 
@@ -69,19 +67,21 @@ _FB_HOST_RE = re.compile(r"(^|\.)(facebook\.com|fb\.com|fb\.watch)$", re.IGNOREC
 _LOCATE_JS = r"""
 (()=>{try{
 const h=document.documentElement.innerHTML;
-const re=/"feedback_id":"([^"]+)"/g;
+// FB embeds page JSON both raw and HTML-escaped (&quot;) — match both forms
+// without unescaping, so a literal &quot; in user text cannot forge a match.
+const re=/"feedback_id":"([^"]+)"|&quot;feedback_id&quot;:&quot;([^&]+)&quot;/g;
 const ids=[];let m;
-while((m=re.exec(h))){if(ids.indexOf(m[1])<0){ids.push(m[1]);if(ids.length>=16)break}}
+while((m=re.exec(h))){const v=m[1]||m[2];if(ids.indexOf(v)<0){ids.push(v);if(ids.length>=16)break}}
 let fid=ids[0]||null;
 const cid=__FB_CID;
 if(cid&&fid){
 try{
 const nodeId=btoa("comment:"+cid);
-const ni=h.indexOf('"id":"'+nodeId+'"');
+const ni=h.indexOf(nodeId);
 if(ni>=0){
 const seg=h.slice(Math.max(0,ni-4000),ni+12000);
-const cm=seg.match(/"feedback_id":"([^"]+)"/)||seg.match(/"feedback":\{"id":"([^"]+)"/);
-if(cm&&cm[1]&&cm[1]!==fid&&ids.indexOf(cm[1])>=0)fid=cm[1];
+const cm=seg.match(/"feedback_id":"([^"]+)"|&quot;feedback_id&quot;:&quot;([^&]+)&quot;/)||seg.match(/"feedback":\{"id":"([^"]+)"\}|&quot;feedback&quot;:{&quot;id&quot;:&quot;([^&]+)&quot;}/);
+if(cm){const cv=cm[1]||cm[2];if(cv&&cv!==fid&&ids.indexOf(cv)>=0)fid=cv;}
 }
 }catch(e){}
 }
@@ -262,11 +262,7 @@ def _resolve_feedback_id(target_id: str, url: str, timeout: float) -> str:
 
 def _send_reaction(target_id: str, *, fid: str, rid: str, deadline: float) -> dict:
     """Fire-and-poll the reaction mutation; returns the parsed page result."""
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    key = f"__fbReactResult_{uuid.uuid4().hex}"
+    key = _result_key("__fbReactResult")
     expr = (
         _SEND_JS.replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
         .replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
@@ -276,57 +272,13 @@ def _send_reaction(target_id: str, *, fid: str, rid: str, deadline: float) -> di
         .replace("__FB_DOC", json.dumps(_DOC_ID))
         .replace("__FB_KEY", json.dumps(key))
     )
-
-    sent = None
-    for _ in range(6):
-        sent = _eval(target_id, expr, left(10))
-        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
-            time.sleep(1.5)
-            continue
-        break
-    if not isinstance(sent, dict) or not sent.get("sent"):
-        err = (sent or {}).get("error") if isinstance(sent, dict) else sent
-        if err == "no_tokens":
-            raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Reaction could not be sent: {err!r}")
-
-    poll_expr = f"window[{json.dumps(key)}]||null"
-    out = None
-    while time.monotonic() < deadline:
-        out = _eval(target_id, poll_expr, left(8))
-        if out:
-            break
-        time.sleep(0.7)
-    if not isinstance(out, dict):
-        raise ReachError(
-            UPSTREAM_BROKEN,
-            "Reaction sent but no result returned — check facebook.com before retrying",
-        )
-    if out.get("error"):
-        raise ReachError(UPSTREAM_BROKEN, f"Reaction failed in page: {out['error'][:200]}")
-    return out
+    return send_mutation(target_id, expr, deadline=deadline, key=key, label="Reaction", eval_fn=_eval)
 
 
 def _reaction_result(out: dict, *, url: str, reaction: str | None, rid: str) -> list:
     """Map the GraphQL page result onto Reach errors / a result item."""
     status = out.get("status")
-    if status == 429:
-        raise ReachError(RATE_LIMITED, "Facebook rate-limited the reaction — slow down before retrying")
-    if isinstance(status, int) and status >= 500:
-        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the reaction mutation")
-
-    if not out.get("parsed"):
-        head = (out.get("body") or "").lower()
-        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
-            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
-
-    errors = out.get("errors") or []
-    if errors:
-        message = _error_message(errors)
-        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
-            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
-        raise ReachError(UPSTREAM_BROKEN, f"CometUFIFeedbackReactMutation failed: {message}")
+    classify_result(out, label="reaction", name=_FRIENDLY)
 
     # GraphQL returned data — verify the reaction state actually changed, so a
     # duplicate react / silent no-op cannot masquerade as ok:true.
@@ -361,11 +313,9 @@ def _reaction_result(out: dict, *, url: str, reaction: str | None, rid: str) -> 
 
 
 def _react_or_unreact(*, url: str, reaction: str | None, timeout: float) -> list:
-    from agent_reach.runtime import session_reuse
-
     _check_url(url)
     rid = "0" if reaction is None else _REACTION_IDS[reaction]
-    session_reuse.prepare("facebook")
+    prepare_facebook()
 
     deadline = time.monotonic() + timeout
 

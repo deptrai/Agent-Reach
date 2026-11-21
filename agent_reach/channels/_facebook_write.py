@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from agent_reach.runtime.result import (
@@ -34,17 +35,142 @@ _DOC_ID = "29221801510819514"
 
 _AUDIENCE = {"only_me": "SELF", "friends": "FRIENDS", "public": "EVERYONE"}
 
+
+def load_skeleton(filename: str) -> tuple[dict, dict]:
+    """Load a single-mutation vars skeleton -> (params, variables).
+
+    Accepts the {"params": ..., "variables": ...} envelope and a flat
+    variables-only file (legacy captures)."""
+    doc = json.loads((Path(__file__).with_name(filename)).read_text(encoding="utf-8"))
+    if "params" in doc or "variables" in doc:
+        return doc.get("params") or {}, doc.get("variables") or {}
+    return {}, doc
+
+
+def load_skeleton_sections(filename: str) -> dict:
+    """Load a multi-mutation vars skeleton -> {"params": {...}, "sections": {kind: entry}}.
+
+    comment/post-edit captures keep one entry per mutation kind beside a shared
+    (or absent) top-level "params" template."""
+    doc = json.loads((Path(__file__).with_name(filename)).read_text(encoding="utf-8"))
+    return {"params": doc.get("params") or {}, "sections": {k: v for k, v in doc.items() if k != "params"}}
+
+
+def prepare_facebook() -> None:
+    """Warm the dedicated browser session for facebook.com (all write verbs)."""
+    from agent_reach.runtime import session_reuse
+
+    session_reuse.prepare("facebook")
+
+
+def _result_key(prefix: str) -> str:
+    """Per-call window key — isolates concurrent mutation results."""
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def send_mutation(
+    target_id: str,
+    expr: str,
+    *,
+    deadline: float,
+    key: str | None = None,
+    label: str = "Mutation",
+    eval_fn: Callable | None = None,
+    poll_expr: str | None = None,
+    dup_hint: bool = False,
+) -> dict:
+    """Fire-and-poll a GraphQL mutation whose page-side result lands in
+    ``window[key]``; shared by every facebook write verb.
+
+    ``expr`` must already carry the substituted key — ``__FB_KEY`` is replaced
+    BEFORE user-controlled fields so a literal "__FB_KEY" inside post text
+    survives. ``label`` prefixes the send-phase error messages ("Post",
+    "Comment create", ...); ``dup_hint`` appends the duplicate-warning suffix.
+    ``eval_fn`` defaults to this module's ``_eval`` — callers in sibling
+    modules pass their own so tests can stub per-module.
+    """
+    if eval_fn is None:
+        eval_fn = _eval
+    if key is None:
+        key = _result_key("__fbResult")
+    if poll_expr is None:
+        poll_expr = f"window[{json.dumps(key)}]||null"
+
+    def left(cap: float) -> float:
+        return max(1.0, min(deadline - time.monotonic(), cap))
+
+    # window.require can exist before DTSGInitialData/LSD register on slow
+    # loads — retry `no_tokens` while a user id is present; no uid at all is a
+    # definitive logout.
+    sent = None
+    for _ in range(6):
+        sent = eval_fn(target_id, expr, left(10))
+        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
+            time.sleep(1.5)
+            continue
+        break
+    if not isinstance(sent, dict) or not sent.get("sent"):
+        err = (sent or {}).get("error") if isinstance(sent, dict) else sent
+        if err == "no_tokens":
+            raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
+        raise ReachError(UPSTREAM_BROKEN, f"{label} could not be sent: {err!r}")
+
+    out = None
+    while time.monotonic() < deadline:
+        out = eval_fn(target_id, poll_expr, left(8))
+        if out:
+            break
+        time.sleep(0.7)
+    if not isinstance(out, dict):
+        raise ReachError(
+            UPSTREAM_BROKEN,
+            f"{label} sent but no result returned — check facebook.com before retrying"
+            + (" to avoid duplicates" if dup_hint else ""),
+        )
+    if out.get("error"):
+        raise ReachError(UPSTREAM_BROKEN, f"{label} failed in page: {out['error'][:200]}")
+    return out
+
+
+def classify_result(out: dict, *, label: str, name: str, confirmed: Callable[[], bool] | None = None) -> bool:
+    """Map transport/GraphQL failures onto Reach errors; returns True when the
+    mutation was positively confirmed.
+
+    ``label`` is the rate-limit/HTTP phrase stem ("post", "comment mutation",
+    "reaction", "share", "post mutation"); ``name`` is the mutation's friendly
+    name for errors[] failures. ``confirmed`` (post edit/delete only) is
+    checked BEFORE errors[] because FB attaches non-fatal errors to payloads
+    that still confirm the mutation.
+    """
+    status = out.get("status")
+    if status == 429:
+        raise ReachError(RATE_LIMITED, f"Facebook rate-limited the {label} — slow down before retrying")
+    http_label = label if label.endswith("mutation") else f"{label} mutation"
+    if isinstance(status, int) and status >= 500:
+        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the {http_label}")
+
+    if not out.get("parsed"):
+        head = (out.get("body") or "").lower()
+        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
+            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
+        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
+
+    if confirmed is not None and confirmed():
+        return True
+
+    errors = out.get("errors") or []
+    if errors:
+        message = _error_message(errors)
+        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
+            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
+        raise ReachError(UPSTREAM_BROKEN, f"{name} failed: {message}")
+    return False
+
+
 # Skeleton captured from a real composer post: {"params": form params replayed
 # verbatim, "variables": Relay variables with placeholders overwritten at send
 # time}. A flat (params-less) file still loads as variables-only.
-_VARS_DOC = json.loads(
-    (Path(__file__).with_name("_facebook_vars.json")).read_text(encoding="utf-8")
-)
-if "params" in _VARS_DOC or "variables" in _VARS_DOC:
-    _PARAMS_TEMPLATE = _VARS_DOC.get("params") or {}
-    _VARS_SKELETON = _VARS_DOC.get("variables") or {}
-else:
-    _PARAMS_TEMPLATE, _VARS_SKELETON = {}, _VARS_DOC
+_PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_facebook_vars.json")
 
 # Build params from window.require + fire the post WITHOUT awaiting it — the
 # result lands in window[<key>] under a per-call key so overlapping posts
@@ -184,9 +310,7 @@ def _error_message(errors: list) -> str:
 
 def facebook_post(*, text: str, audience: str, timeout: float) -> list:
     """Post `text` as a status update in the dedicated browser's FB session."""
-    from agent_reach.runtime import session_reuse
-
-    session_reuse.prepare("facebook")
+    prepare_facebook()
     # One shared deadline for every phase — a fresh budget per phase could
     # overrun the dispatch timeout and strand the in-flight post.
     deadline = time.monotonic() + timeout
@@ -199,7 +323,7 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
         raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
     _wait_ready(target["id"], left(25))
 
-    key = f"__fbPostResult_{uuid.uuid4().hex}"
+    key = _result_key("__fbPostResult")
     expr = (
         _POST_JS.replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
         .replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
@@ -208,56 +332,10 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
         .replace("__FB_KEY", json.dumps(key))
         .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
     )
-
-    # window.require can exist before DTSGInitialData/LSD register on slow
-    # loads — retry `no_tokens` while a user id is present; no uid at all is a
-    # definitive logout.
-    sent = None
-    for _ in range(6):
-        sent = _eval(target["id"], expr, left(10))
-        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
-            time.sleep(1.5)
-            continue
-        break
-    if not isinstance(sent, dict) or not sent.get("sent"):
-        err = (sent or {}).get("error") if isinstance(sent, dict) else sent
-        if err == "no_tokens":
-            raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Post could not be sent: {err!r}")
-
-    poll_expr = f"window[{json.dumps(key)}]||null"
-    out = None
-    while time.monotonic() < deadline:
-        out = _eval(target["id"], poll_expr, left(8))
-        if out:
-            break
-        time.sleep(0.7)
-    if not isinstance(out, dict):
-        raise ReachError(
-            UPSTREAM_BROKEN,
-            "Post sent but no result returned — check facebook.com before retrying to avoid duplicates",
-        )
-    if out.get("error"):
-        raise ReachError(UPSTREAM_BROKEN, f"Post failed in page: {out['error'][:200]}")
+    out = send_mutation(target["id"], expr, deadline=deadline, key=key, label="Post", dup_hint=True)
+    classify_result(out, label="post", name="ComposerStoryCreateMutation")
 
     status = out.get("status")
-    if status == 429:
-        raise ReachError(RATE_LIMITED, "Facebook rate-limited the post — slow down before retrying")
-    if isinstance(status, int) and status >= 500:
-        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the post mutation")
-
-    if not out.get("parsed"):
-        head = (out.get("body") or "").lower()
-        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
-            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
-
-    errors = out.get("errors") or []
-    if errors:
-        message = _error_message(errors)
-        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
-            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
-        raise ReachError(UPSTREAM_BROKEN, f"ComposerStoryCreateMutation failed: {message}")
 
     # Prefer the story permalink; fall back to building one from the numeric
     # story id — never to the actor's profile URL.

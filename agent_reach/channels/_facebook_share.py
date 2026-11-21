@@ -27,31 +27,30 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
-from pathlib import Path
 
 from agent_reach.runtime.result import (
     BAD_INPUT,
-    NEED_LOGIN,
-    RATE_LIMITED,
     UPSTREAM_BROKEN,
     ReachError,
     make_item,
 )
 
 from ._facebook_react import _check_url, _ensure_post_loaded, _post_id_of
-from ._facebook_write import _error_message, _eval, _fb_target, _wait_ready
+from ._facebook_write import (
+    _eval,
+    _fb_target,
+    _result_key,
+    _wait_ready,
+    classify_result,
+    load_skeleton,
+    prepare_facebook,
+    send_mutation,
+)
 
 _DOC_ID = "29304741702489334"
 _FRIENDLY = "ComposerStoryCreateMutation"
 
-_VARS_PATH = Path(__file__).with_name("_fb_share_vars.json")
-_VARS_DOC = json.loads(_VARS_PATH.read_text(encoding="utf-8"))
-if "variables" in _VARS_DOC or "params" in _VARS_DOC:
-    _PARAMS_TEMPLATE = _VARS_DOC.get("params") or {}
-    _VARS_SKELETON = _VARS_DOC.get("variables") or {}
-else:
-    _PARAMS_TEMPLATE, _VARS_SKELETON = {}, _VARS_DOC
+_PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_fb_share_vars.json")
 
 _AUDIENCE = {"only_me": "SELF", "friends": "FRIENDS", "public": "EVERYONE"}
 
@@ -165,11 +164,7 @@ def _resolve_post_id(target_id: str, url: str, timeout: float) -> str:
 
 def _send_share(target_id: str, *, post_id: str, text: str, audience: str, deadline: float) -> dict:
     """Fire-and-poll the share mutation; returns the parsed page result."""
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    key = f"__fbShareResult_{uuid.uuid4().hex}"
+    key = _result_key("__fbShareResult")
     expr = (
         _SEND_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
         .replace("__FB_POST", json.dumps(post_id))
@@ -180,57 +175,13 @@ def _send_share(target_id: str, *, post_id: str, text: str, audience: str, deadl
         # __FB_TEXT last: user text could itself contain another sentinel.
         .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
     )
-
-    sent = None
-    for _ in range(6):
-        sent = _eval(target_id, expr, left(10))
-        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
-            time.sleep(1.5)
-            continue
-        break
-    if not isinstance(sent, dict) or not sent.get("sent"):
-        err = (sent or {}).get("error") if isinstance(sent, dict) else sent
-        if err == "no_tokens":
-            raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Share could not be sent: {err!r}")
-
-    poll_expr = f"window[{json.dumps(key)}]||null"
-    out = None
-    while time.monotonic() < deadline:
-        out = _eval(target_id, poll_expr, left(8))
-        if out:
-            break
-        time.sleep(0.7)
-    if not isinstance(out, dict):
-        raise ReachError(
-            UPSTREAM_BROKEN,
-            "Share sent but no result returned — check facebook.com before retrying to avoid duplicates",
-        )
-    if out.get("error"):
-        raise ReachError(UPSTREAM_BROKEN, f"Share failed in page: {out['error'][:200]}")
-    return out
+    return send_mutation(target_id, expr, deadline=deadline, key=key, label="Share", dup_hint=True, eval_fn=_eval)
 
 
 def _share_result(out: dict, *, post_id: str, text: str, audience: str) -> list:
     """Map the GraphQL page result onto Reach errors / a result item."""
     status = out.get("status")
-    if status == 429:
-        raise ReachError(RATE_LIMITED, "Facebook rate-limited the share — slow down before retrying")
-    if isinstance(status, int) and status >= 500:
-        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the share mutation")
-
-    if not out.get("parsed"):
-        head = (out.get("body") or "").lower()
-        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
-            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
-
-    errors = out.get("errors") or []
-    if errors:
-        message = _error_message(errors)
-        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
-            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
-        raise ReachError(UPSTREAM_BROKEN, f"{_FRIENDLY} failed: {message}")
+    classify_result(out, label="share", name=_FRIENDLY)
 
     # GraphQL returned data — a share that created no new story must not
     # report success (fail-closed, same as facebook_post).
@@ -268,9 +219,7 @@ def facebook_share(*, url: str, text: str = "", audience: str = "only_me", timeo
     if audience not in _AUDIENCE:
         raise ReachError(BAD_INPUT, "audience must be one of: only_me, friends, public")
     _check_url(url)
-    from agent_reach.runtime import session_reuse
-
-    session_reuse.prepare("facebook")
+    prepare_facebook()
 
     deadline = time.monotonic() + timeout
 

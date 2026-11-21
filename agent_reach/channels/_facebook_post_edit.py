@@ -29,20 +29,25 @@ import json
 import re
 import time
 import urllib.parse
-import uuid
-from pathlib import Path
 
 from agent_reach.runtime.result import (
     BAD_INPUT,
-    NEED_LOGIN,
-    RATE_LIMITED,
     UPSTREAM_BROKEN,
     ReachError,
     make_item,
 )
 
 from ._facebook_react import _check_url, _ensure_post_loaded
-from ._facebook_write import _error_message, _eval, _fb_target, _wait_ready
+from ._facebook_write import (
+    _eval,
+    _fb_target,
+    _result_key,
+    _wait_ready,
+    classify_result,
+    load_skeleton_sections,
+    prepare_facebook,
+    send_mutation,
+)
 
 # Persisted-query ids for the two mutations (rotates with FB builds).
 _DOC = {
@@ -50,13 +55,11 @@ _DOC = {
     "delete": ("useCometFeedStoryDeleteMutation", "29557927263819997"),
 }
 
-_VARS_DOC = json.loads(
-    Path(__file__).with_name("_fb_post_vars.json").read_text(encoding="utf-8")
-)
+_VARS_DOC = load_skeleton_sections("_fb_post_vars.json")
 _PARAMS = {}
 _VARS = {}
 for _kind in ("edit", "delete"):
-    _entry = _VARS_DOC.get(_kind) or {}
+    _entry = _VARS_DOC["sections"].get(_kind) or {}
     _PARAMS[_kind] = _entry.get("params") or {}
     _VARS[_kind] = _entry.get("variables") or {}
 
@@ -448,12 +451,8 @@ def _check_ownership(story_uid: str | None, session_uid: str | None) -> None:
 
 def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> dict:
     """Fire-and-poll one post mutation; returns the parsed page result."""
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
     friendly, doc_id = _DOC[kind]
-    key = f"__fbPostResult_{uuid.uuid4().hex}"
+    key = _result_key("__fbPostResult")
     expr = (
         _JS[kind]
         .replace("__FB_PARAMS", json.dumps(_PARAMS[kind]))
@@ -468,35 +467,7 @@ def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> d
     if fields:
         pattern = re.compile("|".join(re.escape(p) for p in fields))
         expr = pattern.sub(lambda m: json.dumps(fields[m.group(0)]), expr)
-
-    sent = None
-    for _ in range(6):
-        sent = _eval(target_id, expr, left(10))
-        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
-            time.sleep(1.5)
-            continue
-        break
-    if not isinstance(sent, dict) or not sent.get("sent"):
-        err = (sent or {}).get("error") if isinstance(sent, dict) else sent
-        if err == "no_tokens":
-            raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Post {kind} could not be sent: {err!r}")
-
-    poll_expr = f"window[{json.dumps(key)}]||null"
-    out = None
-    while time.monotonic() < deadline:
-        out = _eval(target_id, poll_expr, left(8))
-        if out:
-            break
-        time.sleep(0.7)
-    if not isinstance(out, dict):
-        raise ReachError(
-            UPSTREAM_BROKEN,
-            f"Post {kind} sent but no result returned — check facebook.com before retrying",
-        )
-    if out.get("error"):
-        raise ReachError(UPSTREAM_BROKEN, f"Post {kind} failed in page: {out['error'][:200]}")
-    return out
+    return send_mutation(target_id, expr, deadline=deadline, key=key, label=f"Post {kind}", eval_fn=_eval)
 
 
 def _strip_pad(value: object) -> str:
@@ -542,32 +513,22 @@ def _deleted_post(out: dict, story_id: str) -> bool:
 
 def _check_graphql(kind: str, out: dict, *, story_id: str | None = None, text: str | None = None) -> None:
     """Map transport/GraphQL failures onto Reach errors (shared by both kinds)."""
-    status = out.get("status")
-    if status == 429:
-        raise ReachError(RATE_LIMITED, "Facebook rate-limited the post mutation — slow down before retrying")
-    if isinstance(status, int) and status >= 500:
-        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the post mutation")
-
-    if not out.get("parsed"):
-        head = (out.get("body") or "").lower()
-        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
-            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
 
     # Positive signal beats partial errors: FB can attach non-fatal errors to
     # a payload that still confirms the mutation — check the confirmation
-    # FIRST so a confirmed delete/edit is not misreported as a failure.
-    if kind == "delete" and _deleted_post(out, story_id or ""):
-        return
-    if kind == "edit" and text is not None and story_id and _edited_post(out, text, story_id):
-        return
+    # BEFORE errors[] so a confirmed delete/edit is not misreported as a failure.
+    def confirmed() -> bool:
+        if kind == "delete":
+            return _deleted_post(out, story_id or "")
+        return (
+            kind == "edit"
+            and text is not None
+            and bool(story_id)
+            and _edited_post(out, text, story_id or "")
+        )
 
-    errors = out.get("errors") or []
-    if errors:
-        message = _error_message(errors)
-        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
-            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
-        raise ReachError(UPSTREAM_BROKEN, f"{_DOC[kind][0]} failed: {message}")
+    if classify_result(out, label="post mutation", name=_DOC[kind][0], confirmed=confirmed):
+        return
 
     if kind == "delete":
         raise ReachError(
@@ -585,9 +546,7 @@ def _check_graphql(kind: str, out: dict, *, story_id: str | None = None, text: s
 
 def _load_target(timeout: float):
     """Shared browser setup: returns (tid, deadline, left)."""
-    from agent_reach.runtime import session_reuse
-
-    session_reuse.prepare("facebook")
+    prepare_facebook()
     deadline = time.monotonic() + timeout
 
     def left(cap: float) -> float:

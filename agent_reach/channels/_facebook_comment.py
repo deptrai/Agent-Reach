@@ -30,19 +30,24 @@ import json
 import re
 import time
 import urllib.parse
-import uuid
-from pathlib import Path
 
 from agent_reach.runtime.result import (
     BAD_INPUT,
-    NEED_LOGIN,
-    RATE_LIMITED,
     UPSTREAM_BROKEN,
     ReachError,
     make_item,
 )
 
-from ._facebook_write import _error_message, _eval, _fb_target, _wait_ready
+from ._facebook_write import (
+    _eval,
+    _fb_target,
+    _result_key,
+    _wait_ready,
+    classify_result,
+    load_skeleton_sections,
+    prepare_facebook,
+    send_mutation,
+)
 from ._facebook_react import (
     _check_url,
     _ensure_post_loaded,
@@ -55,12 +60,10 @@ _DOC = {
     "delete": ("useCometUFIDeleteCommentMutation", "28931450023144805"),
 }
 
-_VARS_DOC = json.loads(
-    (Path(__file__).with_name("_fb_comment_vars.json")).read_text(encoding="utf-8")
-)
-_PARAMS_TEMPLATE = _VARS_DOC.get("params") or {}
-_CREATE_VARS = (_VARS_DOC.get("create") or {}).get("variables") or {}
-_DELETE_VARS = (_VARS_DOC.get("delete") or {}).get("variables") or {}
+_VARS_DOC = load_skeleton_sections("_fb_comment_vars.json")
+_PARAMS_TEMPLATE = _VARS_DOC["params"]
+_CREATE_VARS = (_VARS_DOC["sections"].get("create") or {}).get("variables") or {}
+_DELETE_VARS = (_VARS_DOC["sections"].get("delete") or {}).get("variables") or {}
 
 # base64 OR base64url alphabet (+ optional '=' padding).
 _COMMENT_ID_RE = re.compile(r"^[A-Za-z0-9+/=_-]{20,400}$")
@@ -278,12 +281,8 @@ def _resolve_comment_id(target_id: str, url: str, timeout: float) -> str:
 
 def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> dict:
     """Fire-and-poll one comment mutation; returns the parsed page result."""
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
     friendly, doc_id = _DOC[kind]
-    key = f"__fbCommentResult_{uuid.uuid4().hex}"
+    key = _result_key("__fbCommentResult")
     expr = (
         _JS[kind]
         .replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
@@ -294,35 +293,7 @@ def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> d
     )
     for placeholder, value in fields.items():
         expr = expr.replace(placeholder, json.dumps(value))
-
-    sent = None
-    for _ in range(6):
-        sent = _eval(target_id, expr, left(10))
-        if isinstance(sent, dict) and sent.get("error") == "no_tokens" and sent.get("hasUid"):
-            time.sleep(1.5)
-            continue
-        break
-    if not isinstance(sent, dict) or not sent.get("sent"):
-        err = (sent or {}).get("error") if isinstance(sent, dict) else sent
-        if err == "no_tokens":
-            raise ReachError(NEED_LOGIN, "facebook.com is not logged in — open https://www.facebook.com/login in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Comment {kind} could not be sent: {err!r}")
-
-    poll_expr = f"window[{json.dumps(key)}]||null"
-    out = None
-    while time.monotonic() < deadline:
-        out = _eval(target_id, poll_expr, left(8))
-        if out:
-            break
-        time.sleep(0.7)
-    if not isinstance(out, dict):
-        raise ReachError(
-            UPSTREAM_BROKEN,
-            f"Comment {kind} sent but no result returned — check facebook.com before retrying",
-        )
-    if out.get("error"):
-        raise ReachError(UPSTREAM_BROKEN, f"Comment {kind} failed in page: {out['error'][:200]}")
-    return out
+    return send_mutation(target_id, expr, deadline=deadline, key=key, label=f"Comment {kind}", eval_fn=_eval)
 
 
 def _deleted_comment(out: dict) -> bool:
@@ -353,24 +324,7 @@ def _deleted_comment(out: dict) -> bool:
 
 def _check_graphql(kind: str, out: dict) -> None:
     """Map transport/GraphQL failures onto Reach errors (shared by both kinds)."""
-    status = out.get("status")
-    if status == 429:
-        raise ReachError(RATE_LIMITED, "Facebook rate-limited the comment mutation — slow down before retrying")
-    if isinstance(status, int) and status >= 500:
-        raise ReachError(UPSTREAM_BROKEN, f"Facebook returned HTTP {status} for the comment mutation")
-
-    if not out.get("parsed"):
-        head = (out.get("body") or "").lower()
-        if any(w in head for w in ("login_form", "checkpoint", "not logged")):
-            raise ReachError(NEED_LOGIN, "Facebook rejected the session — log in again in the Agent Reach browser")
-        raise ReachError(UPSTREAM_BROKEN, f"Unparseable GraphQL response (HTTP {status}): {head[:200]}")
-
-    errors = out.get("errors") or []
-    if errors:
-        message = _error_message(errors)
-        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
-            raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
-        raise ReachError(UPSTREAM_BROKEN, f"{_DOC[kind][0]} failed: {message}")
+    classify_result(out, label="comment mutation", name=_DOC[kind][0])
 
     if kind == "delete" and not _deleted_comment(out):
         raise ReachError(
@@ -397,12 +351,10 @@ def _comment_permalink(post_url: str, comment_id: str) -> str:
 
 def facebook_comment(*, url: str, text: str, timeout: float) -> list:
     """Comment on a Facebook post with `text`."""
-    from agent_reach.runtime import session_reuse
-
     _check_url(url)
     if not isinstance(text, str) or not text.strip():
         raise ReachError(BAD_INPUT, "text must be a non-empty string")
-    session_reuse.prepare("facebook")
+    prepare_facebook()
 
     deadline = time.monotonic() + timeout
 
@@ -446,15 +398,13 @@ def facebook_comment(*, url: str, text: str, timeout: float) -> list:
 
 def facebook_uncomment(*, url: str, timeout: float) -> list:
     """Delete the current user's own comment, by permalink or raw comment id."""
-    from agent_reach.runtime import session_reuse
-
     raw_id = _raw_comment_id(url)
     if raw_id is None:
         _check_url(url)
         cid_param = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("comment_id", [None])[0]
         if not cid_param:
             raise ReachError(BAD_INPUT, "uncomment needs a comment permalink with ?comment_id= or a raw comment id")
-    session_reuse.prepare("facebook")
+    prepare_facebook()
 
     deadline = time.monotonic() + timeout
 

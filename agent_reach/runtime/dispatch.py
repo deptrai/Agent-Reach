@@ -425,6 +425,19 @@ def _proxy_check_ttl() -> float:
     return ttl
 
 
+def _scrub_proxy(proxy: str) -> str:
+    """Drop user:pass from a proxy URL before it reaches an error message."""
+    try:
+        p = urlparse(proxy)
+    except ValueError:
+        return "<proxy>"
+    if not p.username and not p.password:
+        return proxy
+    host = p.hostname or ""
+    port = f":{p.port}" if p.port else ""
+    return f"{p.scheme}://{host}{port}" if p.scheme else f"{host}{port}"
+
+
 class _ProxyUncheckable(Exception):
     """The proxy host cannot even be resolved — nothing to probe."""
 
@@ -494,7 +507,7 @@ def _enforce_proxy_kill_switch() -> None:
             return
         raise ReachError(
             PLATFORM_BLOCKED,
-            f"proxy dead for account {account}: {proxy} (cached verdict, rechecked within {ttl:.0f}s)",
+            f"proxy dead for account {account}: {_scrub_proxy(proxy)} (cached verdict, rechecked within {ttl:.0f}s)",
         )
     try:
         _proxy_alive(proxy)
@@ -506,7 +519,7 @@ def _enforce_proxy_kill_switch() -> None:
         _PROXY_VERDICTS[proxy] = (False, now + ttl)
         raise ReachError(
             PLATFORM_BLOCKED,
-            f"proxy dead for account {account}: {proxy} ({type(exc).__name__}: {exc})",
+            f"proxy dead for account {account}: {_scrub_proxy(proxy)} ({type(exc).__name__})",
         ) from exc
     _PROXY_VERDICTS[proxy] = (True, now + ttl)
 

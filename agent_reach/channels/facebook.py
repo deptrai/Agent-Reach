@@ -66,6 +66,21 @@ class FacebookChannel(OpenCLISiteChannel):
             (Param("url", "facebook.com post or comment URL"),),
             (("opencli", "_unreact"),),
         ),
+        Action(
+            "comment",
+            "Comment on a Facebook post",
+            (
+                Param("url", "facebook.com post URL"),
+                Param("text", "comment content"),
+            ),
+            (("opencli", "_comment"),),
+        ),
+        Action(
+            "uncomment",
+            "Delete your own Facebook comment",
+            (Param("url", "comment permalink (?comment_id=…) or raw comment id"),),
+            (("opencli", "_uncomment"),),
+        ),
     )
 
     def _opencli_search(self, *, query: str, limit: int, timeout: float) -> list:
@@ -96,3 +111,13 @@ class FacebookChannel(OpenCLISiteChannel):
         from ._facebook_react import facebook_unreact
 
         return facebook_unreact(url=url, timeout=timeout)
+
+    def _comment(self, *, url: str, text: str, timeout: float) -> list:
+        from ._facebook_comment import facebook_comment
+
+        return facebook_comment(url=url, text=text, timeout=timeout)
+
+    def _uncomment(self, *, url: str, timeout: float) -> list:
+        from ._facebook_comment import facebook_uncomment
+
+        return facebook_uncomment(url=url, timeout=timeout)

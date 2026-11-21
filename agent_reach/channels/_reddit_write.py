@@ -41,6 +41,9 @@ _BAD_INPUT_CODES = frozenset({
     "SUBREDDIT_NOEXIST", "NO_TEXT", "NO_URL", "NO_TITLE", "BAD_URL",
     "TOO_LONG", "TOO_SHORT", "SUBREDDIT_REQUIRED", "BAD_SR_NAME",
     "INVALID_OPTION", "NO_SELFS", "NO_LINKS", "SUBREDDIT_NOTALLOWED",
+    # A captcha wall does not clear on retry — treat as terminal (BAD_INPUT is
+    # final) instead of UPSTREAM_BROKEN, which the farm would retry forever.
+    "BAD_CAPTCHA",
 })
 _RATE_CODES = frozenset({"RATELIMIT", "RATELIMIT_MESSAGE"})
 _LOGIN_CODES = frozenset({"USER_REQUIRED"})

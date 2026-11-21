@@ -1,0 +1,90 @@
+# Stories của epic-write-lanes — X write qua mutation replay pattern đã chứng minh trên FB.
+# Tracer/spike = entry 1: nếu X không lộ token qua page → REPLAN initiative (XActions HTTP lane lên lane chính).
+
+[[entry]]
+id = 1
+type = "spike"
+title = "X mutation capture feasibility"
+description = "Chứng minh replay path khả thi trên X: dedicated browser có session X login sẵn; capture 1 request write thật (CreateTweet hoặc mutation nhẹ hơn) qua CDP interceptor; verify các token cần thiết (bearer, ct0, x-client-transaction-id, guest token) có lộ qua page context như DTSG/LSD của FB không; phán verdict replayable|not."
+verify = "Verdict viết rõ trong plan: nguồn từng token + sample request body bắt được. Nếu not-replayable → flag REPLAN initiative thay vì cố."
+covers = ["R1"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Doc-id config externalization"
+description = "Config file hot-reloadable chứa TẤT CẢ persisted query ids đang dùng (X queryIds + FB doc_ids); loader đọc lúc action run (không cache cứng); `agent-reach doctor` (hoặc check tương đương) cảnh báo drift khi probe fail; probe cùng 1 doc-id từ ≥2 account/variant xác nhận global vs per-account."
+verify = "Đổi doc-id trong config (không sửa code) → action dùng id mới; doctor báo drift khi probe 404; probe 2 variant ghi kết quả global|per-account."
+covers = ["R3"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Generalize capture pipeline"
+description = "Tổng quát `scripts/capture_fb_mutation.py` → `scripts/capture_mutation.py` (hoặc flag --platform) dùng được cho ≥2 platform (FB + X): interceptor arm qua CDP, filter theo request marker của từng platform (`fb_api_req_friendly_name` vs X graphql path/queryId), sanitize skeleton chung; update docs/fb-mutation-capture.md → capture chung."
+verify = "1 câu lệnh capture ra skeleton hợp lệ cho 1 mutation X thật (ngoài FB đã có); sanitize rules giữ nguyên."
+covers = ["R3"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "x post — CreateTweet replay"
+description = "Action `agent-reach x post \"text\"` (hoặc `twitter post` — quyết slug theo channel hiện có): capture CreateTweet mutation thật → skeleton `_x_tweet_vars.json` → module `_twitter_write.py` replay qua fire-and-poll trên dedicated browser; live verify trên designated test account (KHÔNG nằm trong farm rotation)."
+verify = "`x post` trả ok:true + tweet URL/id verifiable trên X thật; text unicode/emoji giữ nguyên; unit tests theo pattern test_facebook_write.py."
+covers = ["R1"]
+after = [2, 3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "x reply + x quote"
+description = "`x reply <tweet-url> \"text\"` (reply_tweet_id trong variables) và `x quote <tweet-url> \"text\"` (attachment/quote trong variables) — cùng CreateTweet family, chỉ khác variables; live verify trên designated test account."
+verify = "Reply xuất hiện dưới tweet đích; quote render card đúng; sai url → BAD_INPUT trước browser."
+covers = ["R1"]
+after = [4]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 6
+type = "story"
+title = "x thread (+ media decision)"
+description = "`x thread` đăng chuỗi N tweet nối nhau (reply chain); media: nếu capture được upload mutation → support ảnh cơ bản, nếu không → descope documented (text-only thread)."
+verify = "Thread 3 tweet đăng đúng thứ tự trên designated account; media verdict ghi rõ trong plan."
+covers = ["R1"]
+after = [4]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Write → ledger recording"
+description = "Mọi write action mới gọi `farm.record_action(account, action_class, outcome)` khi chạy trong context REACH_ACCOUNT (không có → skip im lặng, single-account path đổi gì); action_class map theo verb; outcome success/fail theo result."
+verify = "REACH_ACCOUNT=test1 + x post → ledger 24h có 1 success by_class.post; action fail → attempts tăng, success không."
+covers = ["R4"]
+after = [4]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 8
+type = "story"
+title = "Write-lanes docs + sweep"
+description = "Update SKILL.md/SKILL_en.md/README/onboarding write surface (X post/reply/quote/thread + safety defaults: designated test account, default visibility); capture-pipeline doc đã generic xong kiểm; sweep cleanup deferred findings."
+verify = "Không còn chỗ nào khẳng định X chỉ đọc; docs khớp capability thật."
+covers = ["R1"]
+after = [5, 6, 7]
+hitl = false
+risk = "low"

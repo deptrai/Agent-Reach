@@ -216,6 +216,7 @@ def _channel_added(channel: Channel) -> bool:
 #: runs own private os.environ and stay parallel; the site/browser file locks
 #: inside the run still govern real browser concurrency.
 _ACCOUNT_ENV_LOCK = threading.Lock()
+_ENV_OWNER: int | None = None  # thread id holding the env window, or None
 
 
 def _farm_env_enter():
@@ -223,34 +224,79 @@ def _farm_env_enter():
 
     Unset → legacy single-account path (no-op). Set → `farm.account_env` yields
     HOME/REACH_BROWSER_PROXY/REACH_ACCOUNT (unknown → NEED_SETUP, bad name →
-    BAD_INPUT, raised before any mutation or lock). Resolved keys replace
-    os.environ; keys absent from the resolution (e.g. a proxy-less account) are
-    dropped rather than inherited, so no foreign proxy leaks into the run.
+    BAD_INPUT). Resolved keys replace os.environ; keys absent from the
+    resolution (e.g. a proxy-less account) are dropped rather than inherited,
+    so no foreign proxy leaks into the run. REACH_FARM_ROOT pins the operator
+    registry so farm.* calls inside the window (nested run_action, ledger
+    writes) hit the same registry, not one under the account's swapped HOME.
     The caller must invoke the returned callable exactly once (finally).
     """
+    global _ENV_OWNER
+    tid = threading.get_ident()
+    lock_held = False
+    if os.environ.get("REACH_FARM_ROOT"):
+        # A farm env window is already applied in this process.
+        if _ENV_OWNER == tid:
+            # Nested run_action inside our own window — inherits the outer
+            # account (e.g. public-web first-attempt); nothing to resolve.
+            return lambda: None
+        # Another thread owns the window — wait for its restore first, then
+        # resolve fresh. Reading the selector before the window ends would see
+        # the OTHER account's REACH_ACCOUNT and silently hijack this run.
+        if not _ACCOUNT_ENV_LOCK.acquire(timeout=QUEUE_WAIT):
+            raise ReachError(
+                "BUSY",
+                "Another farm account action still owns this process's environment",
+            )
+        lock_held = True
     name = os.environ.get("REACH_ACCOUNT")
     if not name:
+        if lock_held:
+            _ACCOUNT_ENV_LOCK.release()
         return lambda: None
     from . import farm
 
-    env = farm.account_env(name)
-    keys = ("HOME", "REACH_BROWSER_PROXY", "REACH_ACCOUNT")
-    if not _ACCOUNT_ENV_LOCK.acquire(timeout=QUEUE_WAIT):
-        raise ReachError("BUSY", "Another account action still owns this process's environment")
-    saved = {key: os.environ.get(key) for key in keys}
-    for key in keys:
-        if key in env:
-            os.environ[key] = env[key]
-        else:
-            os.environ.pop(key, None)
+    try:
+        farm_root = str(farm.farm_root())
+        env = dict(farm.account_env(name))
+    except ReachError:
+        if lock_held:
+            _ACCOUNT_ENV_LOCK.release()
+        raise
+    except Exception as exc:
+        if lock_held:
+            _ACCOUNT_ENV_LOCK.release()
+        raise ReachError(
+            UPSTREAM_BROKEN, f"farm env resolve failed: {exc}"
+        ) from exc
+    env["REACH_FARM_ROOT"] = farm_root
+    keys = ("HOME", "REACH_BROWSER_PROXY", "REACH_ACCOUNT", "REACH_FARM_ROOT")
+    if not lock_held and not _ACCOUNT_ENV_LOCK.acquire(timeout=QUEUE_WAIT):
+        raise ReachError(
+            "BUSY",
+            "Another farm account action still owns this process's environment",
+        )
+    try:
+        saved = {key: os.environ.get(key) for key in keys}
+        for key in keys:
+            if key in env:
+                os.environ[key] = env[key]
+            else:
+                os.environ.pop(key, None)  # never inherit an outer proxy silently
+        _ENV_OWNER = tid
+    except BaseException:
+        _ACCOUNT_ENV_LOCK.release()
+        raise
 
     def restore() -> None:
+        global _ENV_OWNER
         try:
             for key in keys:
                 if saved[key] is None:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = saved[key]
+            _ENV_OWNER = None
         finally:
             _ACCOUNT_ENV_LOCK.release()
 

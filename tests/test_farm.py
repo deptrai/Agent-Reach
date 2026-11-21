@@ -357,4 +357,46 @@ def test_connect_sets_busy_timeout_and_actions_log_schema():
         }
     assert "accounts" in tables
     assert "actions_log" in tables
-    assert "actions_log_account_ts" in tables
+    assert "actions_log_account_class_ts" in tables
+
+
+def test_add_rejects_portless_proxy(capsys):
+    code, out = _run(capsys, ["farm", "account", "add", "x1", "--proxy", "http://host"])
+    assert code == 1
+    assert out["ok"] is False
+    assert "BAD_INPUT" in str(out["error"])
+
+
+def test_record_action_rejects_bad_outcome_vocabulary():
+    farm.add_account("oc", "http://p:1")
+    farm.record_action("oc", "post", "success")
+    farm.record_action("oc", "post", "RATE_LIMITED")
+    with pytest.raises(ReachError) as ei:
+        farm.record_action("oc", "post", "custom-error")
+    assert ei.value.code == BAD_INPUT
+
+
+def test_farm_root_honors_reach_farm_root(monkeypatch):
+    monkeypatch.setenv("REACH_FARM_ROOT", "/tmp/farm-root-override")
+    assert farm.farm_root() == Path("/tmp/farm-root-override")
+
+
+def test_connect_surfaces_upstream_broken_when_farm_root_is_file():
+    fr = farm.farm_root()
+    fr.parent.mkdir(parents=True, exist_ok=True)
+    fr.write_text("not a dir")
+    with pytest.raises(ReachError) as ei:
+        farm.connect()
+    assert ei.value.code == UPSTREAM_BROKEN
+
+
+def test_account_env_rejects_symlinked_home(tmp_path):
+    row = farm.add_account("sym1", "http://p:1")
+    home = Path(row["home"])
+    home.rmdir()
+    target = tmp_path / "realhome"
+    target.mkdir()
+    home.symlink_to(target)
+    with pytest.raises(ReachError) as ei:
+        farm.account_env("sym1")
+    assert ei.value.code == UPSTREAM_BROKEN

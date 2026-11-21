@@ -8,7 +8,7 @@ sources: []
 companions:
   - docs/multi-account-farm-architecture.md
 after: []
-refined: false
+refined: true
 risk: high
 ---
 

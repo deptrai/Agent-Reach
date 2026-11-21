@@ -273,12 +273,13 @@ def classify_result(out: dict, *, label: str, name: str, confirmed: Callable[[],
     if errors:
         message = _error_message(errors)
         lowered = message.lower()
-        # A rotated doc_id / dead persisted query is terminal for this lane —
-        # retrying the identical replay cannot help (farm-account-contract §4).
-        if "document" in lowered and "not found" in lowered:
-            raise ReachError(PERSISTED_QUERY_DEAD, f"{name} failed: {message}")
         if any(w in lowered for w in ("login", "checkpoint", "session")):
             raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
+        # A rotated doc_id / dead persisted query is terminal for this lane —
+        # retrying the identical replay cannot help (farm-account-contract §4).
+        # Match the specific persisted-query signature, not any "not found".
+        if "graphql document" in lowered and "not found" in lowered:
+            raise ReachError(PERSISTED_QUERY_DEAD, f"{name} failed: {message}")
         raise ReachError(UPSTREAM_BROKEN, f"{name} failed: {message}")
     return False
 

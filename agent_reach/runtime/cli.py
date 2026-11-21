@@ -558,7 +558,7 @@ def _cmd_farm(args: Sequence[str]) -> int:
     from . import farm
 
     parser = _Parser(prog="farm", add_help=False)
-    parser.add_argument("op", choices=("account", "env", "ledger"))
+    parser.add_argument("op", choices=("account",))
     parser.add_argument("sub", nargs="?")
     parser.add_argument("name", nargs="?")
     parser.add_argument("--proxy", default=None)
@@ -566,8 +566,6 @@ def _cmd_farm(args: Sequence[str]) -> int:
         ns = parser.parse_args(list(args))
     except _ArgError as exc:
         return _bad_input(None, "farm", str(exc))
-    if ns.op != "account":
-        return _bad_input(None, f"farm {ns.op}", f"farm {ns.op} is not implemented yet")
     if ns.sub == "add":
         if not ns.name or not ns.proxy:
             return _bad_input(None, "farm account add",

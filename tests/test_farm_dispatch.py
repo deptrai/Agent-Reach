@@ -139,3 +139,24 @@ def test_bad_account_name_is_bad_input(monkeypatch):
     monkeypatch.setenv("REACH_ACCOUNT", "../bad")
     out = run_action(_Probe(), "read", {"target": TARGET})
     assert not out["ok"] and out["error"]["code"] == "BAD_INPUT"
+
+
+def test_nested_env_enter_noop_and_registry_pinned(monkeypatch):
+    """A nested run_action inside an applied env window must be a no-op and
+    farm.* calls inside the window must reach the OPERATOR registry
+    (REACH_FARM_ROOT pinned at entry), not a second registry under the
+    account's swapped HOME."""
+    from agent_reach.runtime import dispatch
+
+    farm.add_account("test1", "http://p1:8080")
+    outer_registry = farm.registry_path()
+    monkeypatch.setenv("REACH_ACCOUNT", "test1")
+    restore_outer = dispatch._farm_env_enter()
+    try:
+        assert os.environ.get("REACH_FARM_ROOT")
+        restore_inner = dispatch._farm_env_enter()
+        assert restore_inner() is None  # nested: inherits outer window
+        assert farm.registry_path() == outer_registry
+        assert [a["name"] for a in farm.list_accounts()] == ["test1"]
+    finally:
+        restore_outer()

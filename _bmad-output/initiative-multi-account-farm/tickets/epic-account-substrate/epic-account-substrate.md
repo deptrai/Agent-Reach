@@ -65,3 +65,27 @@ Caps, warm-up, kill-switch, fleet health và fallback — 5 epic sau — đọc-
 - Decision: 2026-11-21 — account selection bằng env `REACH_ACCOUNT` (khớp env-injection hiện có); CLI flag `--account` để khi cần.
 - Decision: 2026-11-21 — tracer bullet = entry 1 `farm-registry-scaffold` (thinnest path CLI → registry → fs); contract doc đứng ngay sau vì 5/6/8 implement theo semantics nó định nghĩa; e2e đóng epic sau sweep.
 - Decision: 2026-11-21 — ban_status automation và netns hard-enforce defer sang epic-fleet-orchestration; epic này chỉ field + contract.
+
+## Code Review
+
+### 2026-11-21
+
+**Code review complete.** 0 `decision-needed`, 10 `patch`, 3 `defer`, 1 rejected. (4 lenses: blind-hunter, edge-case-hunter, verification-gap, intent-alignment; triage tại `/tmp/bmad_triage_epic11.md` — 14+6+2 raw findings → 12 root-cause findings.)
+
+- [x] [Review][Patch] Registry/farm state resolve theo HOME động — farm.* call trong run window (nested `run_action` qua `public_web.attempt`) mở registry rỗng thứ hai dưới account HOME → NEED_SETUP + stray `farm/accounts/<a>/.agent-reach/farm/` [agent_reach/runtime/farm.py:48-86, agent_reach/runtime/dispatch.py:221-260]
+- [x] [Review][Patch] Env-region hazards: `REACH_ACCOUNT` selector + `account_env` resolve đọc ngoài `_ACCOUNT_ENV_LOCK` (race cross-account) + `os.environ` mutation raise → lock leak → mọi run sau BUSY [agent_reach/runtime/dispatch.py:231-257]
+- [x] [Review][Patch] Farm exceptions (sqlite3.Error non-"locked", PrivatePathError, OSError) thoát `run_action`/`_mgmt` dạng traceback — vỡ contract một-dòng-JSON [agent_reach/runtime/farm.py:190-201, agent_reach/runtime/dispatch.py:290-294, agent_reach/runtime/cli.py:83-90]
+- [x] [Review][Patch] WAL/SHM sidecar files không được chmod 0o600 — chỉ registry.db chính [agent_reach/runtime/farm.py connect]
+- [x] [Review][Patch] PQD heuristic quá rộng (`"document"+"not found"` substring) + đứng trước login/session check → auth failure bị misclassify thành PERSISTED_QUERY_DEAD [agent_reach/channels/_facebook_write.py:275-280]
+- [x] [Review][Patch] `_validate_proxy` không bắt buộc port — `http://proxyhost` pass validation [agent_reach/runtime/farm.py]
+- [x] [Review][Patch] `add_account` để lại home dir mồ côi khi INSERT bị IntegrityError (tên trùng) [agent_reach/runtime/farm.py]
+- [x] [Review][Patch] Index drift vs contract §5 `(account,ts)` vs `(account,action_class,ts)` + `PRAGMA foreign_keys` không bật + `record_action` accept mọi outcome string [agent_reach/runtime/farm.py]
+- [x] [Review][Patch] `account_env` trả home không re-validate symlink lúc resolve [agent_reach/runtime/farm.py]
+- [x] [Review][Patch] Dead choices `farm env`/`farm ledger` top-level stub "not implemented yet" [agent_reach/runtime/cli.py]
+- [x] [Review][Defer] `PERSISTED_QUERY_DEAD ∈ FINAL_CODES` mâu thuẫn contract §4 (final-per-lane + fallback-eligible) — deferred: lane-finality routing thuộc epic-farm-resilience, chưa có fallback infra [agent_reach/runtime/result.py]
+- [x] [Review][Defer] `record_action` không có production caller — ledger không được feed bởi run thật — deferred: owned by epic-write-lanes ticket 12.7 + epic-account-guardrails per contract §6 [agent_reach/runtime/farm.py]
+- [x] [Review][Defer] Orphan backend thread post-TIMEOUT đọc HOME/proxy của account kế tiếp — deferred: pre-existing `_call_with_deadline` design, cần env-snapshot per-worker → epic-account-guardrails [agent_reach/runtime/dispatch.py:333-377]
+
+#### Rejected
+
+- `farm account list` trên máy sạch tạo `~/.agent-reach/farm/` + registry.db rỗng (read-path side effect) — consistent với `state.root()` pattern toàn codebase, rarely visible, fix adds complexity.

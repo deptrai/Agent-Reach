@@ -29,3 +29,18 @@ Items parked from retrospectives — each links to where the rationale lives.
   closed when the comment node isn't in the DOM. If `?comment_id=` permalinks
   often lack the rendered node (lazy load), add a scroll-to-comment step
   before locate rather than relying on the fail-closed branch.
+
+## Deferred from: code review of epic-account-substrate (2026-11-21)
+
+- **`PERSISTED_QUERY_DEAD ∈ FINAL_CODES` vs contract §4 lane-finality** —
+  FINAL_CODES hiện nghĩa "không fallback gì"; contract muốn final-per-lane +
+  fallback-eligible. Owner: epic-farm-resilience (khi fallback routing infra
+  tồn tại, gỡ PQD khỏi FINAL_CODES hoặc làm finality theo lane).
+- **`record_action` không có production caller** — ledger primitives sẵn sàng
+  nhưng dispatch chưa ghi `actions_log` trong run thật. Owner: epic-write-lanes
+  ticket 12.7 (write → ledger recording) + epic-account-guardrails.
+- **Orphan backend thread post-TIMEOUT đọc HOME/proxy account kế tiếp** —
+  `_call_with_deadline` bỏ rơi worker trong khi finally restore env
+  (`dispatch.py:333-377`). Pre-existing flaw, env swap khuếch đại. Owner:
+  epic-account-guardrails — cần env snapshot per-worker thay vì mutate
+  `os.environ`.

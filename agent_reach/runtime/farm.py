@@ -17,7 +17,11 @@ from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlparse
 
-from agent_reach.utils.paths import ensure_no_symlink_path, make_private_dir
+from agent_reach.utils.paths import (
+    PrivatePathError,
+    ensure_no_symlink_path,
+    make_private_dir,
+)
 
 from . import state
 from .result import BAD_INPUT, NEED_SETUP, UPSTREAM_BROKEN, ReachError
@@ -39,13 +43,20 @@ _SCHEMA = (
     "ts INTEGER NOT NULL, "
     "action_class TEXT NOT NULL, "
     "outcome TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS actions_log_account_ts ON actions_log (account, ts)",
+    "CREATE INDEX IF NOT EXISTS actions_log_account_class_ts ON actions_log (account, action_class, ts)",
 )
 
 _COLUMNS = "name, proxy, home, age, ban_status, created_at, updated_at"
 
 
 def farm_root() -> Path:
+    # The operator registry lives at $HOME/.agent-reach/farm. Dispatch pins it
+    # via REACH_FARM_ROOT while a run window swaps HOME to an account home —
+    # otherwise farm.* calls inside the window resolve a second, empty
+    # registry under the account's own .agent-reach.
+    override = os.environ.get("REACH_FARM_ROOT")
+    if override:
+        return Path(override)
     return state.root() / "farm"
 
 
@@ -55,23 +66,36 @@ def registry_path() -> Path:
 
 def connect() -> sqlite3.Connection:
     """Open the registry (creating dirs lazily) in WAL mode with the schema applied."""
-    make_private_dir(state.root())
-    make_private_dir(farm_root())
-    db = registry_path()
-    ensure_no_symlink_path(db, "registry")
-    conn = sqlite3.connect(db)
     try:
-        mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
-        if mode != "wal":
-            raise ReachError(UPSTREAM_BROKEN, "registry cannot use WAL on this filesystem")
-        conn.execute("PRAGMA busy_timeout=5000")
-        for stmt in _SCHEMA:
-            conn.execute(stmt)
-        if sys.platform != "win32":
-            os.chmod(db, 0o600)
-    except Exception:
-        conn.close()
+        make_private_dir(state.root())
+        make_private_dir(farm_root())
+        db = registry_path()
+        ensure_no_symlink_path(db, "registry")
+        conn = sqlite3.connect(db)
+        try:
+            mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+            if mode != "wal":
+                raise ReachError(UPSTREAM_BROKEN, "registry cannot use WAL on this filesystem")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA foreign_keys=ON")
+            for stmt in _SCHEMA:
+                conn.execute(stmt)
+            if sys.platform != "win32":
+                os.chmod(db, 0o600)
+                # WAL/SHM sidecars are created before this chmod and carry the
+                # same rows — give them the same mode.
+                for suffix in ("-wal", "-shm"):
+                    try:
+                        os.chmod(Path(str(db) + suffix), 0o600)
+                    except FileNotFoundError:
+                        pass
+        except Exception:
+            conn.close()
+            raise
+    except ReachError:
         raise
+    except (OSError, PrivatePathError, sqlite3.Error) as exc:
+        raise ReachError(UPSTREAM_BROKEN, f"farm registry unavailable: {exc}") from exc
     return conn
 
 
@@ -87,8 +111,7 @@ def _validate_name(name: str) -> None:
 def _validate_proxy(proxy: str) -> None:
     try:
         parsed = urlparse(proxy or "")
-        ok = parsed.scheme in _PROXY_SCHEMES and bool(parsed.hostname)
-        parsed.port  # .port raises ValueError on a non-numeric or out-of-range port
+        ok = parsed.scheme in _PROXY_SCHEMES and bool(parsed.hostname) and parsed.port is not None
     except ValueError:
         ok = False
     if not ok:
@@ -111,7 +134,10 @@ def add_account(name: str, proxy: str) -> dict:
     _validate_proxy(proxy)
     home = farm_root() / "accounts" / name
     created = not home.exists()
-    home = account_home(name)
+    try:
+        home = account_home(name)
+    except (OSError, PrivatePathError) as exc:
+        raise ReachError(UPSTREAM_BROKEN, f"cannot create account home: {exc}") from exc
     now = int(time.time())
 
     def _insert() -> None:
@@ -125,6 +151,8 @@ def add_account(name: str, proxy: str) -> dict:
     try:
         _with_busy_retry(_insert)
     except sqlite3.IntegrityError:
+        if created:
+            shutil.rmtree(home, ignore_errors=True)
         raise ReachError(BAD_INPUT, f"farm account already exists: {name}")
     except Exception:
         if created:
@@ -177,7 +205,14 @@ def account_env(name: str) -> dict:
             f"unknown farm account: {name}",
             hint=f"Run `agent-reach farm account add {name} --proxy <url>` first.",
         )
-    env = {"HOME": str(Path(row["home"] or farm_root() / "accounts" / name).absolute())}
+    home = Path(row["home"] or farm_root() / "accounts" / name)
+    # The stored path was private when the row was written — re-validate so a
+    # symlink swapped in later cannot steer HOME outside the farm tree.
+    try:
+        ensure_no_symlink_path(home, "account home")
+    except PrivatePathError as exc:
+        raise ReachError(UPSTREAM_BROKEN, f"account home is unsafe: {exc}") from exc
+    env = {"HOME": str(home.absolute())}
     if row["proxy"]:
         env["REACH_BROWSER_PROXY"] = row["proxy"]
     env["REACH_ACCOUNT"] = name
@@ -185,6 +220,7 @@ def account_env(name: str) -> dict:
 
 
 _BUSY_RETRIES = 3
+_OUTCOME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,39}")
 
 
 def _with_busy_retry(fn, what: str = "registry"):
@@ -195,7 +231,7 @@ def _with_busy_retry(fn, what: str = "registry"):
             return fn()
         except sqlite3.OperationalError as exc:
             if "locked" not in str(exc).lower():
-                raise
+                raise ReachError(UPSTREAM_BROKEN, f"{what} failed: {exc}") from exc
             last = exc
             time.sleep(0.05)
     raise ReachError(UPSTREAM_BROKEN, f"{what} stayed busy: {last}")
@@ -216,8 +252,10 @@ def record_action(account: str, action_class: str, outcome: str) -> dict:
     _validate_name(account)
     if not isinstance(action_class, str) or not action_class:
         raise ReachError(BAD_INPUT, "action_class must be a non-empty string")
-    if not isinstance(outcome, str) or not outcome:
-        raise ReachError(BAD_INPUT, "outcome must be a non-empty string")
+    if not isinstance(outcome, str) or not (
+        outcome == "success" or _OUTCOME_RE.fullmatch(outcome)
+    ):
+        raise ReachError(BAD_INPUT, "outcome must be 'success' or an error code (UPPER_SNAKE)")
     now = int(time.time())
 
     def _insert() -> None:

@@ -178,7 +178,9 @@ def parse_body(body: str) -> dict:
 
 
 def default_out_name(friendly: str) -> str:
-    name = friendly or "mutation"
+    # friendly_name comes from the page (a form field the tab pushes into the
+    # capture buffer) — strip to a safe slug so "../x" can't escape the dir.
+    name = re.sub(r"[^A-Za-z0-9]", "", friendly or "") or "mutation"
     # UFILikeMutation -> UFI_Like_Mutation -> ufi_like_mutation
     name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
     name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)

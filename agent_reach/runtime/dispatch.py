@@ -611,10 +611,16 @@ def _record_farm_write(channel_name: str, action_name: str, result: dict) -> Non
     # attempt, whatever its code (over cap, unreadable ledger, bad cap).
     if (result.get("meta") or {}).get("quota_refused"):
         return
+    # A thread posts N tweets in one run — count each posted item, or the cap
+    # under-counts live tweets (a 3-tweet thread is 3 posts, not 1).
+    n = 1
+    if outcome == "success" and action_name == "thread":
+        n = max(1, len(result.get("items") or []))
     try:
         from . import farm
 
-        farm.record_action(account, action_name, outcome)
+        for _ in range(n):
+            farm.record_action(account, action_name, outcome)
     except Exception:  # noqa: BLE001 - ledger writes must never break the action
         pass
 

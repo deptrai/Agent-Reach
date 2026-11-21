@@ -277,9 +277,8 @@ def _send_create_tweet(
     (twitter_thread) reuse an already-warmed tab under one shared deadline."""
     if not text or not text.strip():
         raise ReachError(BAD_INPUT, "tweet text is empty")
-    if len(text) > 280:
-        # Raw char count: every counting scheme makes >280 chars invalid.
-        raise ReachError(BAD_INPUT, "tweet text is over 280 characters")
+    if _weighted_len(text) > 280:
+        raise ReachError(BAD_INPUT, "tweet text is over 280 weighted characters")
     # One shared deadline for every phase — a fresh budget per phase could
     # overrun the dispatch timeout and strand the in-flight post.
     if _deadline is not None and _tid is not None:
@@ -348,8 +347,8 @@ def twitter_thread(*, texts: list, timeout: float) -> list:
     for i, text in enumerate(texts, start=1):
         if not isinstance(text, str) or not text.strip():
             raise ReachError(BAD_INPUT, f"tweet {i} text is empty")
-        if len(text) > 280:
-            raise ReachError(BAD_INPUT, f"tweet {i} text is over 280 characters")
+        if _weighted_len(text) > 280:
+            raise ReachError(BAD_INPUT, f"tweet {i} text is over 280 weighted characters")
     # One shared deadline for the whole chain — each leg's wait/send/poll is
     # deadline-bound, so the run can never outlive the dispatch budget.
     deadline, left, tid = x_write_target(timeout, target_fn=_x_target, wait_fn=_wait_x_ready)
@@ -402,6 +401,25 @@ def twitter_post(*, text: str, timeout: float) -> list:
 
 
 _STATUS_ID_RE = re.compile(r"/status(?:es)?/(\d+)")
+
+
+def _weighted_len(text: str) -> int:
+    """X's weighted length: CJK / emoji count 2, URLs count 23, else 1.
+
+    Approximation of twitter-text (no grapheme lib): codepoints in the CJK
+    ranges and non-BMP (emoji) weigh 2; a URL token weighs a flat 23."""
+    import unicodedata
+
+    total = 0
+    for tok in re.split(r"(https?://\S+)", text):
+        if tok.lower().startswith(("http://", "https://")):
+            total += 23
+            continue
+        for ch in tok:
+            o = ord(ch)
+            wide = o > 0xFFFF or 0x1100 <= o <= 0x115F or 0x2E80 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7A3 or 0xFF01 <= o <= 0xFF60
+            total += 2 if wide else 1
+    return total
 
 
 def _tweet_id(target: str) -> str:

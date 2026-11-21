@@ -1,0 +1,104 @@
+# Tickets for epic-platform-lanes — write lanes LinkedIn/Reddit/Instagram/TikTok
+[[entry]]
+id = 1
+type = "spike"
+title = "LinkedIn session + write capture feasibility"
+description = """
+Spike: verify login-state LinkedIn trên dedicated browser (operator cung cấp session; nếu chưa login → báo NEED_LOGIN cho operator, không tự login). Nếu có session: probe post mutation — LinkedIn dùng REST (voyager/api) chứ không GraphQL → xác định endpoint tạo post, capture request thật qua interceptor, đánh giá replayability theo pattern X/FB. Verdict + skeleton draft vào plan file.
+"""
+verify = "Verdict ghi rõ: replayable (endpoint + headers + body shape) hay không + lý do; nếu replayable → skeleton draft capture được."
+covers = ["R2"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 2
+type = "story"
+title = "LinkedIn post write action"
+description = """
+Implement `agent-reach linkedin post` (hoặc action tương đương trên channel linkedin nếu có) replay post mutation theo spike 15.1; doc-ids/endpoint ids vào query-ids config; fire-and-poll CDP pattern; ghi ledger qua WRITE_ACTIONS map; live verify trên designated test account.
+"""
+verify = "`linkedin post \"text\"` ok:true trên test account thật; post thấy trên LinkedIn; ledger ghi success."
+covers = ["R2"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "spike"
+title = "Reddit session + write capture feasibility"
+description = """
+Spike: verify Reddit session trên dedicated browser; Reddit có GraphQL (gql.reddit.com) + old API — xác định submit post mutation, capture, đánh giá replayability. Nếu chưa login → báo NEED_LOGIN cho operator."
+"""
+verify = "Verdict ghi rõ replayable + endpoint/mutation name hay không + lý do."
+covers = ["R2"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Reddit post + comment write actions"
+description = """
+Implement `agent-reach reddit post` (+ `reddit comment` nếu mutation tương tự) replay submit mutation theo spike 15.3; live verify trên test account.
+"""
+verify = "`reddit post` ok:true trên test account; post hiện trên Reddit; ledger ghi."
+covers = ["R2"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "spike"
+title = "Instagram session + write capture feasibility"
+description = """
+Spike: verify Instagram session trên dedicated browser; probe create-post mutation (GraphQL hoặc /api/v1/) + assess replayability. Nếu chưa login → báo NEED_LOGIN cho operator."
+"""
+verify = "Verdict ghi rõ replayable + lý do."
+covers = ["R2"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Instagram post write action"
+description = """
+Implement `agent-reach instagram post` replay mutation theo spike 15.5 (text/caption-only nếu media upload phức tạp — descope rõ như X thread media); live verify.
+"""
+verify = "`instagram post` ok:true hoặc descope ghi rõ; ledger ghi."
+covers = ["R2"]
+after = [5]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 7
+type = "spike"
+title = "TikTok session + write capture feasibility"
+description = """
+Spike: TikTok chưa có read channel trong repo — probe session trên dedicated browser, xác định có thể capture upload/post mutation không (TikTok upload flow chunked — có thể không replayable như X media); verdict build được hay descope rõ lý do trong Notes."
+"""
+verify = "Verdict: khả thi → kế hoạch lane cụ thể; không → lý do kỹ thuật cụ thể ghi vào plan."
+covers = ["R2"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 8
+type = "story"
+title = "Platform lanes docs + sweep"
+description = """
+Update docs/contract/skill surface cho các lanes mới thực sự ship; descope notes cho lanes không khả thi; sweep giữ suite xanh."
+"""
+verify = "Docs khớp capability thật; suite xanh."
+covers = []
+after = [2, 4, 6, 7]
+hitl = false
+risk = "low"

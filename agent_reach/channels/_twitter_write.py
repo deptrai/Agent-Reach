@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""X write actions (post a tweet) in the shared Agent Reach browser.
+"""X write actions (post / reply / quote) in the shared Agent Reach browser.
 
 Reads go through `opencli twitter`; writes replay X's own `CreateTweet`
 GraphQL mutation inside a logged-in x.com page of the dedicated browser.
@@ -17,11 +17,18 @@ Send is the shared fire-and-poll pattern from `_facebook_write`: the eval
 fires `fetch` without awaiting it and the result lands in a per-call
 window key, so a slow mutation can't hit the CDP socket timeout and a
 transport-layer retry can't double-post.
+
+Reply and quote reuse the SAME CreateTweet envelope — only `variables`
+changes (`reply.in_reply_to_tweet_id`, `attachment_url`), so both are
+injected into the in-memory body template at send time rather than kept
+as separate skeleton files.
 """
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -251,8 +258,19 @@ def x_classify_result(
     return False
 
 
-def twitter_post(*, text: str, timeout: float) -> list:
-    """Post `text` as a tweet in the dedicated browser's X session."""
+def _send_create_tweet(
+    *,
+    text: str,
+    timeout: float,
+    extra_vars: dict | None = None,
+    extra_raw: dict | None = None,
+    label: str = "Post",
+    verb: str = "Posted",
+    key_prefix: str = "__xPostResult",
+) -> list:
+    """Shared CreateTweet send for post/reply/quote — same envelope; only
+    ``variables`` differs (``extra_vars`` merged in before the body is baked
+    into the send expression)."""
     if not text or not text.strip():
         raise ReachError(BAD_INPUT, "tweet text is empty")
     if len(text) > 280:
@@ -262,21 +280,24 @@ def twitter_post(*, text: str, timeout: float) -> list:
     # overrun the dispatch timeout and strand the in-flight post.
     deadline, left, tid = x_write_target(timeout, target_fn=_x_target, wait_fn=_wait_x_ready)
 
-    key = _result_key("__xPostResult")
+    key = _result_key(key_prefix)
     qid = query_ids.get("x", "CreateTweet", _SKELETON.get("query_id") or "")
     path = (_SKELETON.get("path_template") or "/i/api/graphql/{query_id}/CreateTweet").replace("{query_id}", qid)
+    body = copy.deepcopy(_SKELETON.get("body_template") or {})
+    if extra_vars:
+        body.setdefault("variables", {}).update(extra_vars)
     expr = (
         _X_SEND_TEMPLATE.replace("__X_PUBLIC_BEARER", json.dumps(_PUBLIC_BEARER))
         .replace("__X_PATH", json.dumps(path))
         .replace("__X_HEADERS", json.dumps(_SKELETON.get("headers_template") or {}, ensure_ascii=False))
-        .replace("__X_BODY", json.dumps(_SKELETON.get("body_template") or {}, ensure_ascii=False))
+        .replace("__X_BODY", json.dumps(body, ensure_ascii=False))
         .replace("__X_QID", json.dumps(qid))
         .replace("__X_KEY", json.dumps(key))
         .replace("__X_TEXT", json.dumps(text, ensure_ascii=False))
     )
     try:
-        out = send_mutation(tid, expr, deadline=deadline, key=key, label="Post", eval_fn=_eval, dup_hint=True)
-        x_classify_result(out, label="post", name="CreateTweet", confirmed=lambda: bool(out.get("tweetId")))
+        out = send_mutation(tid, expr, deadline=deadline, key=key, label=label, eval_fn=_eval, dup_hint=True)
+        x_classify_result(out, label=label.lower(), name="CreateTweet", confirmed=lambda: bool(out.get("tweetId")))
     except ReachError as exc:
         # send_mutation's NEED_LOGIN names facebook.com — reword for this lane.
         if exc.code == NEED_LOGIN and "facebook.com" in (exc.message or ""):
@@ -294,17 +315,74 @@ def twitter_post(*, text: str, timeout: float) -> list:
             UPSTREAM_BROKEN,
             "Mutation returned data but no tweet — check x.com before retrying to avoid duplicates",
         )
-    return [
-        make_item(
-            title=text[:120],
-            url=url,
-            text="Posted",
-            raw={
-                "status": out.get("status"),
-                "tweetId": tweet_id,
-                "url": url,
-                "screenName": out.get("screenName"),
-                "echo": out.get("echoText"),
-            },
-        )
-    ]
+    raw = {
+        "status": out.get("status"),
+        "tweetId": tweet_id,
+        "url": url,
+        "screenName": out.get("screenName"),
+        "echo": out.get("echoText"),
+    }
+    if extra_raw:
+        raw.update(extra_raw)
+    return [make_item(title=text[:120], url=url, text=verb, raw=raw)]
+
+
+def twitter_post(*, text: str, timeout: float) -> list:
+    """Post `text` as a tweet in the dedicated browser's X session."""
+    return _send_create_tweet(text=text, timeout=timeout)
+
+
+_STATUS_ID_RE = re.compile(r"/status(?:es)?/(\d+)")
+
+
+def _tweet_id(target: str) -> str:
+    """Numeric tweet id from an X status URL or a raw id — BAD_INPUT on
+    anything else, raised BEFORE any browser work."""
+    target = (target or "").strip()
+    if target.isdigit():
+        return target
+    if not _is_x_url(target):
+        raise ReachError(BAD_INPUT, f"not an X tweet URL: {target[:120]}")
+    m = _STATUS_ID_RE.search(urllib.parse.urlparse(target).path)
+    if not m:
+        raise ReachError(BAD_INPUT, f"no tweet id in URL: {target[:120]}")
+    return m.group(1)
+
+
+def twitter_reply(*, url: str, text: str, timeout: float) -> list:
+    """Reply to the tweet at `url` (X status URL or numeric id)."""
+    reply_to = _tweet_id(url)
+    return _send_create_tweet(
+        text=text,
+        timeout=timeout,
+        extra_vars={"reply": {"in_reply_to_tweet_id": reply_to, "exclude_reply_user_ids": []}},
+        extra_raw={"inReplyTo": reply_to},
+        label="Reply",
+        verb="Replied",
+        key_prefix="__xReplyResult",
+    )
+
+
+def twitter_quote(*, url: str, text: str, timeout: float) -> list:
+    """Quote-tweet the tweet at `url` (X status URL or numeric id); the
+    returned item URL is the NEW quote tweet."""
+    url = (url or "").strip()
+    tid = _tweet_id(url)  # BAD_INPUT before browser work
+    if _is_x_url(url):
+        path = urllib.parse.urlparse(url).path
+        end = _STATUS_ID_RE.search(path).end()
+        # Canonical attachment: https://x.com/<user>/status/<id> — tracking
+        # params and /photo/N suffixes are dropped.
+        attachment = "https://x.com" + path[:end]
+    else:
+        # Raw numeric id — no author known; i/web/status resolves it.
+        attachment = f"https://x.com/i/web/status/{tid}"
+    return _send_create_tweet(
+        text=text,
+        timeout=timeout,
+        extra_vars={"attachment_url": attachment},
+        extra_raw={"attachmentUrl": attachment},
+        label="Quote",
+        verb="Quoted",
+        key_prefix="__xQuoteResult",
+    )

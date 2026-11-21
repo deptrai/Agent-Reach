@@ -77,6 +77,24 @@ class TwitterChannel(Channel):
             # dispatcher serializes it with other browser traffic).
             (("opencli", "_post"),),
         ),
+        Action(
+            "reply",
+            "Reply to a tweet",
+            (
+                Param("url", "tweet URL (x.com/<user>/status/<id>) or numeric tweet id"),
+                Param("text", "reply content"),
+            ),
+            (("opencli", "_reply"),),
+        ),
+        Action(
+            "quote",
+            "Quote a tweet",
+            (
+                Param("url", "tweet URL (x.com/<user>/status/<id>) or numeric tweet id"),
+                Param("text", "quote text"),
+            ),
+            (("opencli", "_quote"),),
+        ),
     )
 
     def can_handle(self, url: str) -> bool:
@@ -102,3 +120,13 @@ class TwitterChannel(Channel):
         from ._twitter_write import twitter_post
 
         return twitter_post(text=text, timeout=timeout)
+
+    def _reply(self, *, url: str, text: str, timeout: float) -> list:
+        from ._twitter_write import twitter_reply
+
+        return twitter_reply(url=url, text=text, timeout=timeout)
+
+    def _quote(self, *, url: str, text: str, timeout: float) -> list:
+        from ._twitter_write import twitter_quote
+
+        return twitter_quote(url=url, text=text, timeout=timeout)

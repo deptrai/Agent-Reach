@@ -108,7 +108,7 @@ This table reflects the current release.
 | boss | optional | job and JD search | login |
 | xiaoyuzhou | optional | podcast transcription | Groq key |
 | twitter | experimental | search tweets, profiles, user tweets, threads | login |
-| facebook | experimental | search, profiles, post (default only_me) | login |
+| facebook | experimental | search, profiles, writes (post/react/comment/edit/delete/share, default only_me) | login |
 | instagram | experimental | user search, profiles, user posts | login |
 
 - **default**: works right after install; you can remove one, and updates won't add it back.
@@ -181,7 +181,7 @@ Platforms change and tools break all the time. Switching tools only means updati
 
 ## Security
 
-- **Read-only**: it searches and reads; it never posts, comments, likes or sends messages.
+- **Read-first**: it searches and reads; it never sends messages. The only writes are on Facebook — `post`/`react`/`unreact`/`comment`/`uncomment`/`post-edit`/`post-delete`/`share` — acting only on your own timeline/posts; post and share default to only_me, delete needs `--confirm`.
 - **It never logs in for you or asks for your password.** Some platforms reuse a login already on your computer (that one site only, your browser unchanged); a login window opens only when you really need to sign in again, and you do it yourself.
 - **The dedicated browser is open to this computer only**; other machines can't connect to it.
 - **Use a secondary account.** The reused login is usually your main account, and platforms may restrict accounts used for automation. To switch, just tell your agent.

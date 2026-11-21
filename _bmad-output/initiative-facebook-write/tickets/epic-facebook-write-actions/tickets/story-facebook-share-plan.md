@@ -3,7 +3,7 @@ title: facebook share
 type: feature
 ticket: '5'
 created: 2026-11-21
-status: in-progress
+status: built
 baseline_revision: d972494f6d5c30fceb1430c05bde0d8420a7986e
 route: full
 route_source: auto

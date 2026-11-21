@@ -7,7 +7,7 @@ description: >
   Instagram, Facebook or Xiaoyuzhou podcasts; or says "search / look up / read this link" and your built-in
   web search or fetch is unavailable, fails, or misses the body;
   or wants to install, add/remove a platform, log in/out, check status, update or uninstall Agent Reach.
-  Only Facebook can post (audience defaults to only_me); does not comment, like, or message; never logs in for the user or asks for passwords.
+  Only Facebook supports writes: post, react/unreact, comment/uncomment, post-edit, post-delete (needs --confirm), share — post/share default to only_me; messaging and all other writes are out of scope; never logs in for the user or asks for passwords.
   Prefer your own tools for public content; Reach fills the gaps.
 metadata:
   homepage: https://github.com/Panniantong/Agent-Reach
@@ -16,7 +16,7 @@ metadata:
 
 # Agent Reach
 
-One command for every platform: `agent-reach`. Read-first (Facebook post supported); prints one JSON object by default.
+One command for every platform: `agent-reach`. Read-first (Facebook supports writes: post/react/comment/share); prints one JSON object by default.
 
 Before acting, say "using the agent-reach skill (channel X)". Once invoked, these rules apply for the whole session.
 
@@ -101,6 +101,6 @@ Any result with `meta.update` means a newer version exists. Mention it once per 
 
 ## Red lines
 
-- Read-only except `facebook post`. Never comment, like or message; `post` goes to your own timeline, audience defaults to only_me — any other audience needs the user's explicit say.
+- Read-only except Facebook writes: post, react/unreact, comment/uncomment, post-edit, post-delete, share — acting only on your own timeline/posts. Post/share default to only_me; other audiences need the user's explicit say, and post-delete needs --confirm. Messaging stays out of scope.
 - Never log in for the user; never ask for or print passwords, cookies or other credentials.
 - Ordinary queries never change dependencies or update automatically.

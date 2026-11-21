@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import nullcontext
@@ -10,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from agent_reach.channels.base import Action, Channel
 
 from . import state
-from .browser_binding import query_slot, wait_lock
+from .browser_binding import QUEUE_WAIT, query_slot, wait_lock
 from .clock import Clock, bind
 from .result import (
     BAD_INPUT,
@@ -210,6 +211,52 @@ def _channel_added(channel: Channel) -> bool:
         return False
 
 
+#: Serializes in-process account runs: os.environ is process-global, so a second
+#: run waits here instead of observing another account's HOME. Cross-process
+#: runs own private os.environ and stay parallel; the site/browser file locks
+#: inside the run still govern real browser concurrency.
+_ACCOUNT_ENV_LOCK = threading.Lock()
+
+
+def _farm_env_enter():
+    """Resolve REACH_ACCOUNT through the farm registry and apply its env; returns a restore callable.
+
+    Unset → legacy single-account path (no-op). Set → `farm.account_env` yields
+    HOME/REACH_BROWSER_PROXY/REACH_ACCOUNT (unknown → NEED_SETUP, bad name →
+    BAD_INPUT, raised before any mutation or lock). Resolved keys replace
+    os.environ; keys absent from the resolution (e.g. a proxy-less account) are
+    dropped rather than inherited, so no foreign proxy leaks into the run.
+    The caller must invoke the returned callable exactly once (finally).
+    """
+    name = os.environ.get("REACH_ACCOUNT")
+    if not name:
+        return lambda: None
+    from . import farm
+
+    env = farm.account_env(name)
+    keys = ("HOME", "REACH_BROWSER_PROXY", "REACH_ACCOUNT")
+    if not _ACCOUNT_ENV_LOCK.acquire(timeout=QUEUE_WAIT):
+        raise ReachError("BUSY", "Another account action still owns this process's environment")
+    saved = {key: os.environ.get(key) for key in keys}
+    for key in keys:
+        if key in env:
+            os.environ[key] = env[key]
+        else:
+            os.environ.pop(key, None)
+
+    def restore() -> None:
+        try:
+            for key in keys:
+                if saved[key] is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = saved[key]
+        finally:
+            _ACCOUNT_ENV_LOCK.release()
+
+    return restore
+
+
 def run_action(
     channel: Channel,
     action_name: str,
@@ -240,6 +287,10 @@ def run_action(
     attempts: List[dict] = []
     errors: List[ReachError] = []
     cached_errors: List[ReachError] = []
+    try:
+        release_env = _farm_env_enter()
+    except ReachError as exc:
+        return envelope(channel=channel.name, action=action_name, elapsed_ms=elapsed(), error=exc)
     try:
         limited = cooldown(channel.name)
         if limited:
@@ -322,6 +373,8 @@ def run_action(
                     return public
     except ReachError as exc:
         errors.append(exc)
+    finally:
+        release_env()
 
     errors = errors or cached_errors
     final = next((e for e in errors if e.code in FINAL_CODES), None)

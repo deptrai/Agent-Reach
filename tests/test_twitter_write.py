@@ -393,3 +393,96 @@ def test_reply_quote_actions_wire_through_channel():
         action = find_action(ch, name)
         assert action is not None
         assert action.backends == (("opencli", method),)
+
+
+# ── thread (write: reply-chain) ─────────────────────────────────────
+
+
+def _thread_result(n: int) -> dict:
+    tid = f"198300000000000{n:04d}"
+    return ok_result(
+        tweetId=tid,
+        tweetUrl=f"https://x.com/reach_test/status/{tid}",
+    )
+
+
+def test_thread_posts_first_tweet_then_reply_chain_in_order(harness):
+    harness["poll_results"] = [_thread_result(1), _thread_result(2), _thread_result(3)]
+    items = tw.twitter_thread(texts=["one", "two", "three"], timeout=30)
+    assert [it["raw"]["tweetId"] for it in items] == [f"198300000000000{i:04d}" for i in (1, 2, 3)]
+    sends = harness["send"]
+    assert len(sends) == 3
+    assert '"in_reply_to_tweet_id"' not in sends[0]
+    assert '"in_reply_to_tweet_id": "1983000000000000001"' in sends[1]
+    assert '"in_reply_to_tweet_id": "1983000000000000002"' in sends[2]
+    assert re.search(r'const KEY="__xPostResult_[0-9a-f]{32}"', sends[0])
+    assert all(re.search(r'const KEY="__xReplyResult_[0-9a-f]{32}"', s) for s in sends[1:])
+    assert items[1]["raw"]["inReplyTo"] == "1983000000000000001"
+
+
+def test_thread_fewer_than_two_texts_is_bad_input_before_browser(harness):
+    for texts in ([], ["solo"]):
+        with pytest.raises(ReachError) as exc:
+            tw.twitter_thread(texts=texts, timeout=30)
+        assert exc.value.code == BAD_INPUT
+    assert harness["evals"] == []
+
+
+def test_thread_empty_or_overlong_text_is_bad_input_before_browser(harness):
+    for texts in (["ok", "   "], ["ok", None], ["ok", "a" * 281], ["ok", "fine", 42]):
+        with pytest.raises(ReachError) as exc:
+            tw.twitter_thread(texts=texts, timeout=30)
+        assert exc.value.code == BAD_INPUT
+    assert harness["evals"] == []
+
+
+def test_thread_partial_failure_reports_index_and_posted_ids(harness):
+    harness["poll_results"] = [
+        _thread_result(1),
+        ok_result(tweetUrl=None, tweetId=None, errors=[{"message": "over capacity"}]),
+    ]
+    with pytest.raises(ReachError) as exc:
+        tw.twitter_thread(texts=["one", "two", "three"], timeout=30)
+    assert exc.value.code == UPSTREAM_BROKEN
+    assert "tweet 2/3" in exc.value.message
+    assert "1983000000000000001" in exc.value.message
+    assert "over capacity" in exc.value.message
+    assert len(harness["send"]) == 2  # the third tweet was never sent
+
+
+def test_thread_first_leg_failure_mentions_position(harness):
+    harness["poll_results"] = [{"status": 429, "parsed": False, "body": "rate limited"}]
+    with pytest.raises(ReachError) as exc:
+        tw.twitter_thread(texts=["one", "two"], timeout=30)
+    assert exc.value.code == RATE_LIMITED
+    assert "tweet 1/2" in exc.value.message
+    assert len(harness["send"]) == 1
+
+
+def test_thread_tiny_budget_times_out_without_sending(harness):
+    with pytest.raises(ReachError) as exc:
+        tw.twitter_thread(texts=["one", "two"], timeout=2)
+    assert exc.value.code == "TIMEOUT"
+    assert harness["send"] == []
+
+
+def test_thread_action_wires_and_branches_read_vs_write(monkeypatch):
+    from agent_reach.channels.twitter import TwitterChannel
+    from agent_reach.runtime.dispatch import find_action
+
+    ch = TwitterChannel()
+    action = find_action(ch, "thread")
+    assert action is not None
+    assert action.backends == (("opencli", "_thread"),)
+
+    monkeypatch.setattr(ch, "_opencli_thread", lambda *, target, timeout: [("read", target)])
+    assert ch._thread(texts=[TWEET_URL], timeout=5) == [("read", TWEET_URL)]
+
+    import agent_reach.channels._twitter_write as tw_mod
+
+    monkeypatch.setattr(tw_mod, "twitter_thread", lambda *, texts, timeout: ["WRITE", texts])
+    assert ch._thread(texts=["a", "b"], timeout=5) == ["WRITE", ["a", "b"]]
+
+    with pytest.raises(ReachError) as exc:
+        ch._thread(texts=["not a tweet url"], timeout=5)
+    assert exc.value.code == BAD_INPUT

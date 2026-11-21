@@ -40,6 +40,7 @@ from agent_reach.runtime.result import (
     NEED_LOGIN,
     PERSISTED_QUERY_DEAD,
     RATE_LIMITED,
+    TIMEOUT,
     UPSTREAM_BROKEN,
     ReachError,
     make_item,
@@ -267,10 +268,13 @@ def _send_create_tweet(
     label: str = "Post",
     verb: str = "Posted",
     key_prefix: str = "__xPostResult",
+    _deadline: float | None = None,
+    _tid: str | None = None,
 ) -> list:
     """Shared CreateTweet send for post/reply/quote — same envelope; only
     ``variables`` differs (``extra_vars`` merged in before the body is baked
-    into the send expression)."""
+    into the send expression). ``_deadline``/``_tid`` let a caller
+    (twitter_thread) reuse an already-warmed tab under one shared deadline."""
     if not text or not text.strip():
         raise ReachError(BAD_INPUT, "tweet text is empty")
     if len(text) > 280:
@@ -278,7 +282,10 @@ def _send_create_tweet(
         raise ReachError(BAD_INPUT, "tweet text is over 280 characters")
     # One shared deadline for every phase — a fresh budget per phase could
     # overrun the dispatch timeout and strand the in-flight post.
-    deadline, left, tid = x_write_target(timeout, target_fn=_x_target, wait_fn=_wait_x_ready)
+    if _deadline is not None and _tid is not None:
+        deadline, tid = _deadline, _tid
+    else:
+        deadline, _left, tid = x_write_target(timeout, target_fn=_x_target, wait_fn=_wait_x_ready)
 
     key = _result_key(key_prefix)
     qid = query_ids.get("x", "CreateTweet", _SKELETON.get("query_id") or "")
@@ -325,6 +332,68 @@ def _send_create_tweet(
     if extra_raw:
         raw.update(extra_raw)
     return [make_item(title=text[:120], url=url, text=verb, raw=raw)]
+
+
+def twitter_thread(*, texts: list, timeout: float) -> list:
+    """Post `texts` as a reply-chain thread: tweet 1 posts normally, each next
+    replies to the previous tweet's id (same CreateTweet mutation — text only;
+    media is descoped: X uploads run a multi-request INIT/APPEND/FINALIZE
+    binary flow outside the GraphQL envelope this lane replays).
+
+    Stops at the first failed tweet; the error reports the failed index and
+    the ids already posted so a partial chain is never read as success."""
+    texts = list(texts or [])
+    if len(texts) < 2:
+        raise ReachError(BAD_INPUT, "thread needs at least 2 tweet texts")
+    for i, text in enumerate(texts, start=1):
+        if not isinstance(text, str) or not text.strip():
+            raise ReachError(BAD_INPUT, f"tweet {i} text is empty")
+        if len(text) > 280:
+            raise ReachError(BAD_INPUT, f"tweet {i} text is over 280 characters")
+    # One shared deadline for the whole chain — each leg's wait/send/poll is
+    # deadline-bound, so the run can never outlive the dispatch budget.
+    deadline, left, tid = x_write_target(timeout, target_fn=_x_target, wait_fn=_wait_x_ready)
+    items: list = []
+    reply_to: str | None = None
+    for i, text in enumerate(texts, start=1):
+        if deadline - time.monotonic() < 3:
+            raise ReachError(
+                TIMEOUT,
+                f"thread timed out before tweet {i}/{len(texts)}"
+                + _thread_posted_suffix(items),
+            )
+        try:
+            posted = _send_create_tweet(
+                text=text,
+                timeout=timeout,  # unused once _deadline/_tid take over
+                _deadline=deadline,
+                _tid=tid,
+                extra_vars=(
+                    {"reply": {"in_reply_to_tweet_id": reply_to, "exclude_reply_user_ids": []}}
+                    if reply_to
+                    else None
+                ),
+                extra_raw={"inReplyTo": reply_to} if reply_to else None,
+                label="Reply" if reply_to else "Post",
+                verb="Replied" if reply_to else "Posted",
+                key_prefix="__xReplyResult" if reply_to else "__xPostResult",
+            )
+        except ReachError as exc:
+            raise ReachError(
+                exc.code,
+                f"thread stopped at tweet {i}/{len(texts)}"
+                + _thread_posted_suffix(items)
+                + f": {exc.message}",
+                hint=exc.hint,
+            ) from exc
+        reply_to = posted[0]["raw"]["tweetId"] or _tweet_id(posted[0]["url"])
+        items.extend(posted)
+    return items
+
+
+def _thread_posted_suffix(items: list) -> str:
+    ids = [str(it.get("raw", {}).get("tweetId") or "?") for it in items]
+    return f" — {len(ids)} already posted ({', '.join(ids)})" if ids else ""
 
 
 def twitter_post(*, text: str, timeout: float) -> list:

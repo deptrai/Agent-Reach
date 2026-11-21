@@ -65,9 +65,16 @@ class TwitterChannel(Channel):
         ),
         Action(
             "thread",
-            "A tweet with its replies",
-            (Param("target", "tweet id or link"),),
-            (("opencli", "_opencli_thread"),),
+            "A tweet with its replies — or post a reply-chain thread (≥2 texts; text only, no media)",
+            (
+                Param(
+                    "texts",
+                    "one tweet URL/id reads the thread; two or more texts post a thread",
+                    type=list,
+                ),
+            ),
+            (("opencli", "_thread"),),
+            timeout=90,
         ),
         Action(
             "post",
@@ -115,6 +122,29 @@ class TwitterChannel(Channel):
     def _opencli_thread(self, *, target: str, timeout: float) -> list:
         tweet_id = str(target).rstrip("/").split("/")[-1].split("?")[0]
         return _x(["thread", tweet_id], timeout)
+
+    def _thread(self, *, texts: list, timeout: float) -> list:
+        """One positional that resolves to a tweet id reads the thread; two or
+        more texts post a reply-chain thread (anything else: BAD_INPUT before
+        any browser work)."""
+        from agent_reach.runtime.result import BAD_INPUT, ReachError
+
+        texts = list(texts or [])
+        if len(texts) == 1:
+            from ._twitter_write import _tweet_id
+
+            target = str(texts[0]).strip()
+            try:
+                _tweet_id(target)
+            except ReachError as exc:
+                raise ReachError(
+                    BAD_INPUT,
+                    "thread needs a tweet URL/id to read, or at least 2 texts to post",
+                ) from exc
+            return self._opencli_thread(target=target, timeout=timeout)
+        from ._twitter_write import twitter_thread
+
+        return twitter_thread(texts=texts, timeout=timeout)
 
     def _post(self, *, text: str, timeout: float) -> list:
         from ._twitter_write import twitter_post

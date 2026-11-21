@@ -130,7 +130,7 @@ def _usage(channel: Channel, action: Action) -> str:
     parts = ["agent-reach", channel.name, action.name]
     for p in action.params:
         if p.required:
-            parts.append(f"<{p.name}>")
+            parts.append(f"<{p.name}>" + (f" [<{p.name}> ...]" if p.type is list else ""))
         elif p.type is bool:
             parts.append(f"[--{p.name}]")
         else:
@@ -146,8 +146,9 @@ def _parse_action_args(action: Action, args: Sequence[str]) -> Dict[str, object]
     parser = _Parser(prog=action.name, add_help=False)
     for p in action.params:
         if p.required:
-            # Join extra words so an unquoted multi-word query still works.
-            parser.add_argument(p.name, nargs="+" if p.type is str else None)
+            # str joins extra words so an unquoted multi-word query still works;
+            # list keeps the positionals as separate values (e.g. thread texts).
+            parser.add_argument(p.name, nargs="+" if p.type in (str, list) else None)
         elif p.type is bool:
             parser.add_argument(f"--{p.name}", dest=p.name, action="store_true", default=None)
         else:

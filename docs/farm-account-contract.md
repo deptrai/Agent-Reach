@@ -58,7 +58,7 @@ proxy. The invariant is about the egress *path*, not the observed address.
 
 | Layer | Mechanism | Strength | Status |
 |---|---|---|---|
-| 1 — dispatch soft-check | Pre-flight at dispatch: proxy configured + non-empty + matches registry row; connectivity probe when implemented. Failure → `PLATFORM_BLOCKED`-class refusal, never direct. | Best-effort: catches misconfiguration and dead proxies at the application layer; cannot stop a kernel-level leak. | Contract now; implemented by later dispatch/guardrails work |
+| 1 — dispatch soft-check | Pre-flight at dispatch: proxy configured + non-empty + matches registry row, then a TCP handshake probe (5s, verdict cached ~60s). Failure → `PLATFORM_BLOCKED`, never direct. | Best-effort: catches misconfiguration and dead proxies at the application layer; cannot stop a kernel-level leak. | Implemented — `_enforce_proxy_kill_switch` (story 13.2) |
 | 2 — netns hard-enforce | Container/netns routing makes egress outside proxy_i impossible at the network layer. | Hard: the leak path does not exist. | **Deferred** — baked by epic-fleet-orchestration |
 
 Layer 1 without layer 2 is accepted risk during the env-injection phase
@@ -162,14 +162,41 @@ CREATE TABLE IF NOT EXISTS actions_log (
 | Identity env contract (`REACH_ACCOUNT` → `HOME`/`REACH_BROWSER_PROXY`) | Contract — bound here | stories 11.3 (`env`), 11.4 (dispatch) |
 | `NEED_SETUP` on unknown account, no silent default `HOME` | Contract — bound here | story 11.4 |
 | Kill-switch semantics "zero egress outside proxy_i, fail-closed" | Contract — bound here | this doc is the single definition |
-| Layer-1 dispatch soft-check | Contract semantics, implementation later | epic-account-guardrails / dispatch hook |
+| Layer-1 dispatch soft-check | Implemented | story 13.2 (`dispatch._enforce_proxy_kill_switch`) |
 | Layer-2 netns hard-enforce | **Deferred** | epic-fleet-orchestration |
 | `actions_log` schema, `record_action`, rolling-24h query, `ledger` CLI | Contract — bound here | story 11.5 |
 | `PERSISTED_QUERY_DEAD` error class in `result.py` | Contract — bound here | story 11.6 |
 | PQD → fallback routing, fallback lane wiring | **Deferred** (rule bound here) | epic-farm-resilience |
-| Caps / warm-up enforcement reading the ledger | **Deferred** | epic-account-guardrails |
+| Caps / warm-up enforcement reading the ledger | Implemented | stories 13.1 + 13.3 (`dispatch._enforce_write_quota`) |
 | `ban_status` transition automation | **Deferred** | epic-fleet-orchestration |
 | Container template, per-account netns/bridge bind | **Deferred** (env contract fixed here) | epic-fleet-orchestration |
+
+### Implemented — dispatch guardrails (stories 13.1–13.3)
+
+Both guards run inside `run_action` before cooldown, public-web, and every
+backend — kill-switch first, then quota — so a refusal is zero egress and
+writes no ledger row. A refusal surfaces as a normal JSON envelope:
+`ok=false`, `error.code` = `PLATFORM_BLOCKED` / `QUOTA_EXCEEDED`,
+`error.message` naming the account, verb, cap, and count.
+
+- **Kill-switch** (`dispatch._enforce_proxy_kill_switch`): applies to every
+  action (reads included) under `REACH_ACCOUNT` with a registry proxy. A dead
+  proxy → `PLATFORM_BLOCKED`. `REACH_PROXY_CHECK=0` bypasses;
+  `REACH_PROXY_CHECK_TTL` overrides the 60s verdict cache.
+- **Write quota** (`dispatch._enforce_write_quota`): only verbs in
+  `WRITE_ACTIONS` (twitter post/reply/quote/thread, the facebook write set)
+  count; reads and unlisted verbs never touch the ledger. Caps default in
+  `DEFAULT_CAPS`; override with `REACH_CAP_<CLASS>` (`post-edit` →
+  `REACH_CAP_POST_EDIT`). `0` refuses every write; a class with no entry is
+  unlimited. Over cap → `QUOTA_EXCEEDED`, message names account/class/cap/count.
+- **Warm-up ramp**: the resolved cap scales by the registry `age` onboard
+  epoch — d0–3: 25%, d4–7: 50%, d8–14: 75%, d15+: 100% (`RAMP_SCHEDULE`,
+  overridable via `REACH_RAMP="days:factor,..."`). Effective cap =
+  `max(1, floor(cap × factor))`; a missing epoch means mature (factor 1.0) and
+  cap `0` stays refuse-all. When a cap is ramped the refusal message shows
+  `cap × ramp (account age Nd) = effective`.
+
+The operator-facing runbook is `docs/farm-guardrails-playbook.md`.
 
 ## References
 

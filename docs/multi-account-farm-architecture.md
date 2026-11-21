@@ -40,9 +40,10 @@ dự kiến nâng 256GB + dual CPU = 36C/72T). Ưu tiên **stealth** để giả
   - `BACKEND_PAUSE_SECONDS`: TIMEOUT→60s, UPSTREAM_BROKEN→120s.
   - `query_slot`: giới hạn query browser đồng thời per-site + tổng.
   - Hints `RATE_LIMITED`/`PLATFORM_BLOCKED` ép "không đổi backend, không retry" — defensive đúng.
-  - **Chưa có**: quota *theo account + theo ngày* cho writes (model `action-caps` của XActions:
-    ledger rolling-24h, e.g. 2400 posts / 500 likes / 400 follows). Model của Reach là
-    per-channel trên 1 máy — vừa khít kiến trúc container-per-account, chỉ thiếu cap writes.
+  - Quota *theo account + theo ngày* cho writes — **đã có** (dispatch guardrails,
+    `docs/farm-account-contract.md` §6): `actions_log` rolling-24h, `REACH_CAP_<CLASS>`
+    (default `DEFAULT_CAPS`), ramp theo `accounts.age`. Model là per-account trên 1
+    registry — vừa khít kiến trúc container-per-account.
 - **Write lane**: Facebook (`channels/_facebook_write.py` — replay persisted GraphQL
   `ComposerStoryCreateMutation` doc-id `"29221801510819514"` trong page đã login qua CDP
   `Runtime.evaluate`) + X (`channels/_twitter_write.py` — replay `CreateTweet` qua in-page

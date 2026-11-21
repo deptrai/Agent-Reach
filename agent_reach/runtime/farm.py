@@ -15,6 +15,7 @@ import sys
 import time
 from contextlib import closing
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
 from agent_reach.utils.paths import (
@@ -217,6 +218,31 @@ def account_env(name: str) -> dict:
         env["REACH_BROWSER_PROXY"] = row["proxy"]
     env["REACH_ACCOUNT"] = name
     return env
+
+
+def account_proxy(name: str) -> Optional[str]:
+    """The registry proxy for one account, or None when the row stores none.
+
+    Authoritative source for the dispatch kill-switch (contract §2 layer-1):
+    the env var can be stale relative to the row. Raises the same errors as
+    account_env — unknown → NEED_SETUP, bad name → BAD_INPUT.
+    """
+    _validate_name(name)
+
+    def _query():
+        with closing(connect()) as conn:
+            return conn.execute(
+                "SELECT proxy FROM accounts WHERE name = ?", (name,)
+            ).fetchone()
+
+    row = _with_busy_retry(_query)
+    if row is None:
+        raise ReachError(
+            NEED_SETUP,
+            f"unknown farm account: {name}",
+            hint=f"Run `agent-reach farm account add {name} --proxy <url>` first.",
+        )
+    return row[0] or None
 
 
 _BUSY_RETRIES = 3

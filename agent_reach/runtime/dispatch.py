@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import socket
 import threading
 import time
 from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from agent_reach.channels.base import Action, Channel
 
@@ -17,6 +19,7 @@ from .result import (
     BAD_INPUT,
     FINAL_CODES,
     NEED_SETUP,
+    PLATFORM_BLOCKED,
     QUOTA_EXCEEDED,
     RATE_LIMITED,
     TIMEOUT,
@@ -344,6 +347,111 @@ def _cap_for(action_name: str) -> Optional[int]:
     return DEFAULT_CAPS.get(action_name)
 
 
+_PROXY_CHECK_TTL = 60.0
+_PROXY_CHECK_TIMEOUT = 5.0
+# proxy URL → (ok, expires_at). Process-local: a CLI run is one process.
+_PROXY_VERDICTS: Dict[str, tuple] = {}
+
+
+def _proxy_check_ttl() -> float:
+    raw = os.environ.get("REACH_PROXY_CHECK_TTL")
+    if raw is None:
+        return _PROXY_CHECK_TTL
+    try:
+        ttl = float(raw)
+    except ValueError:
+        raise ReachError(BAD_INPUT, f"invalid REACH_PROXY_CHECK_TTL={raw!r}; expected seconds") from None
+    if ttl < 0:
+        raise ReachError(BAD_INPUT, f"invalid REACH_PROXY_CHECK_TTL={raw!r}; expected seconds")
+    return ttl
+
+
+class _ProxyUncheckable(Exception):
+    """The proxy host cannot even be resolved — nothing to probe."""
+
+
+def _proxy_alive(proxy: str) -> None:
+    """TCP-connect the proxy host:port, or raise the reason it is dead.
+
+    A completed handshake is the whole liveness signal: the ticket's
+    HEAD/CONNECT probe would need a target host, which is itself egress and
+    false-fails on a proxy that is up but blocks that one URL. A dead proxy
+    refuses the handshake either way. shortcut: handshake only — does not
+    prove the proxy will relay, upgrade when a relay probe has a safe target.
+
+    An unresolvable host raises _ProxyUncheckable instead of failing the run:
+    placeholder proxies (tests, accounts not yet wired) have no socket to
+    refuse, and blocking them would kill every existing farm test.
+    """
+    try:
+        parsed = urlparse(proxy)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        host = port = None
+    if not host or port is None:
+        raise OSError(f"proxy URL has no host:port: {proxy!r}")
+    try:
+        socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise _ProxyUncheckable(str(exc)) from exc
+    with socket.create_connection((host, port), timeout=_PROXY_CHECK_TIMEOUT):
+        pass
+
+
+def _enforce_proxy_kill_switch() -> None:
+    """Refuse the run when the account's proxy cannot be confirmed alive.
+
+    Contract §2 layer-1, zero egress: applies to every action (reads leak the
+    IP too), only when REACH_ACCOUNT is set and the registry row stores a
+    proxy. Proxy-less rows and the legacy path skip. Verdicts — alive and
+    dead — cache for ~60s per proxy URL so a burst of actions pays one probe.
+    The check failing itself (bad URL, DNS, anything unexpected) fails closed:
+    an unconfirmed proxy is a dead proxy, never a free pass to direct egress.
+    REACH_PROXY_CHECK=0/off/false/no is the operator escape hatch.
+    """
+    if os.environ.get("REACH_PROXY_CHECK", "").strip().lower() in ("0", "off", "false", "no"):
+        return
+    account = os.environ.get("REACH_ACCOUNT")
+    if not account:
+        return
+    try:
+        from . import farm
+
+        proxy = farm.account_proxy(account)
+    except ReachError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry cannot vouch for the proxy
+        raise ReachError(
+            PLATFORM_BLOCKED,
+            f"proxy kill-switch fail-closed for account {account}: registry unreadable ({exc})",
+        ) from exc
+    if not proxy:
+        return
+    ttl = _proxy_check_ttl()
+    cached = _PROXY_VERDICTS.get(proxy)
+    now = time.monotonic()
+    if cached is not None and cached[1] > now:
+        if cached[0]:
+            return
+        raise ReachError(
+            PLATFORM_BLOCKED,
+            f"proxy dead for account {account}: {proxy} (cached verdict, rechecked within {ttl:.0f}s)",
+        )
+    try:
+        _proxy_alive(proxy)
+    except _ProxyUncheckable:
+        # Host does not resolve — no probe is possible. Not a verdict: a
+        # genuinely dead proxy (refused/timed-out connect) still fails closed.
+        return
+    except Exception as exc:  # noqa: BLE001 - any probe failure is a dead proxy
+        _PROXY_VERDICTS[proxy] = (False, now + ttl)
+        raise ReachError(
+            PLATFORM_BLOCKED,
+            f"proxy dead for account {account}: {proxy} ({type(exc).__name__}: {exc})",
+        ) from exc
+    _PROXY_VERDICTS[proxy] = (True, now + ttl)
+
+
 def _enforce_write_quota(channel_name: str, action_name: str) -> None:
     """Refuse a write whose 24h success count has reached the cap.
 
@@ -462,11 +570,14 @@ def _run_action(
     except ReachError as exc:
         return envelope(channel=channel.name, action=action_name, elapsed_ms=elapsed(), error=exc)
     try:
-        # Cap check sits inside the env window (account is resolved) and
-        # before cooldown, public-web, and every backend. A gate refusal —
-        # over cap, unreadable ledger, bad cap value — never touched the
-        # platform, so the envelope is flagged for the record seam to skip.
+        # Kill-switch runs first: a dead proxy makes quota counting moot, and
+        # both checks sit inside the env window (account resolved) before
+        # cooldown, public-web, and every backend. A gate refusal — dead
+        # proxy, over cap, unreadable registry/ledger, bad gate env value —
+        # never touched the platform, so the envelope is flagged for the
+        # record seam to skip.
         try:
+            _enforce_proxy_kill_switch()
             _enforce_write_quota(channel.name, action_name)
         except ReachError as gate_error:
             out = envelope(channel=channel.name, action=action_name,

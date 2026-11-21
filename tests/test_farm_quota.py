@@ -7,6 +7,7 @@ legacy path, and unlimited classes are untouched; a refusal writes no ledger row
 """
 
 import os
+import time
 from contextlib import closing
 
 from agent_reach.channels.base import Action, Channel, Param
@@ -51,8 +52,19 @@ def _rows(account: str) -> int:
         ).fetchone()[0]
 
 
+def _mature(account: str) -> None:
+    """Age the account past the 13.3 warm-up ramp so cap tests see the raw cap."""
+    with closing(farm.connect()) as conn:
+        with conn:
+            conn.execute(
+                "UPDATE accounts SET age = ? WHERE name = ?",
+                (int(time.time()) - 30 * 86400, account),
+            )
+
+
 def test_third_post_is_refused_and_ledger_stays_at_two(monkeypatch):
     farm.add_account("a1", "http://p1:8080")
+    _mature("a1")  # a fresh row is day-0 → ramp 25% would cut cap 2 to 1
     monkeypatch.setenv("REACH_ACCOUNT", "a1")
     monkeypatch.setenv("REACH_CAP_POST", "2")
     probe = _WriteProbe()

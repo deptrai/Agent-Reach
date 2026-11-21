@@ -245,6 +245,37 @@ def account_proxy(name: str) -> Optional[str]:
     return row[0] or None
 
 
+def account_age(name: str) -> Optional[int]:
+    """The registry `age` column — the onboard unix epoch — or None.
+
+    The warm-up ramp (contract §3, story 13.3) scales quota caps by account
+    age. Rows repaired by hand or migrated before the column existed can
+    store NULL/non-numeric text; those return None so the caller treats the
+    account as mature instead of punishing an unmigrated row. Unknown
+    account → NEED_SETUP, bad name → BAD_INPUT — same contract as
+    account_proxy.
+    """
+    _validate_name(name)
+
+    def _query():
+        with closing(connect()) as conn:
+            return conn.execute(
+                "SELECT age FROM accounts WHERE name = ?", (name,)
+            ).fetchone()
+
+    row = _with_busy_retry(_query)
+    if row is None:
+        raise ReachError(
+            NEED_SETUP,
+            f"unknown farm account: {name}",
+            hint=f"Run `agent-reach farm account add {name} --proxy <url>` first.",
+        )
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
 _BUSY_RETRIES = 3
 _OUTCOME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,39}")
 

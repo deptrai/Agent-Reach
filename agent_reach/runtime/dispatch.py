@@ -347,6 +347,56 @@ def _cap_for(action_name: str) -> Optional[int]:
     return DEFAULT_CAPS.get(action_name)
 
 
+#: Warm-up ramp (story 13.3): (inclusive account-age bound in days, cap
+#: factor). Older than the last bound → factor 1.0 (mature). Override with
+#: REACH_RAMP="days:factor,..." e.g. "3:0.25,7:0.5,14:0.75".
+RAMP_SCHEDULE = ((3, 0.25), (7, 0.50), (14, 0.75))
+
+
+def _ramp_schedule() -> tuple:
+    """The active ramp table — REACH_RAMP parsed, else RAMP_SCHEDULE."""
+    raw = os.environ.get("REACH_RAMP")
+    if raw is None:
+        return RAMP_SCHEDULE
+    try:
+        steps = sorted(
+            (int(days), float(factor))
+            for days, factor in (part.split(":") for part in raw.split(","))
+        )
+    except ValueError:
+        steps = []
+    if not steps or any(d < 0 or not 0 < f <= 1 for d, f in steps):
+        raise ReachError(
+            BAD_INPUT,
+            f"invalid REACH_RAMP={raw!r}; expected 'days:factor,...' like '3:0.25,7:0.5'",
+        )
+    return tuple(steps)
+
+
+def _ramp_factor(age_days: Optional[int], schedule: tuple) -> float:
+    """Cap scale for an account age_days old; unknown age (None) → mature."""
+    if age_days is None:
+        return 1.0
+    for bound, factor in schedule:
+        if age_days <= bound:
+            return factor
+    return 1.0
+
+
+def _account_age_days(account: str, farm) -> Optional[int]:
+    """Whole days since the onboard epoch, or None when unusable.
+
+    None covers a missing/non-numeric epoch AND a zero/future one: `age` is
+    the onboard epoch, so 0 or a timestamp ahead of now cannot be an age —
+    those rows are unmigrated or hand-repaired and get the mature factor
+    instead of the strictest ramp.
+    """
+    onboard = farm.account_age(account)
+    if not onboard or onboard > int(time.time()):
+        return None
+    return (int(time.time()) - onboard) // 86400
+
+
 _PROXY_CHECK_TTL = 60.0
 _PROXY_CHECK_TIMEOUT = 5.0
 # proxy URL → (ok, expires_at). Process-local: a CLI run is one process.
@@ -459,6 +509,11 @@ def _enforce_write_quota(channel_name: str, action_name: str) -> None:
     REACH_ACCOUNT), and unlimited classes — those never touch the ledger.
     An unreadable ledger refuses the write (fail-closed): a cap that cannot
     be checked must not become a free pass.
+
+    Warm-up ramp (13.3): the cap scales by account age — the registry `age`
+    onboard epoch — via RAMP_SCHEDULE/REACH_RAMP. Effective cap =
+    max(1, floor(cap x factor)); a missing onboard epoch means a mature
+    account (factor 1.0), and an explicit cap of 0 stays refuse-all.
     """
     if action_name not in WRITE_ACTIONS.get(channel_name, ()):
         return
@@ -472,17 +527,29 @@ def _enforce_write_quota(channel_name: str, action_name: str) -> None:
         from . import farm
 
         snap = farm.ledger_24h(account)
+        age_days = _account_age_days(account, farm) if cap > 0 else None
     except ReachError:
         raise
     except Exception as exc:  # noqa: BLE001 - any ledger failure blocks the write
         raise ReachError(UPSTREAM_BROKEN, f"quota check failed for account {account}: {exc}") from exc
     by_class = snap.get("by_class") or {}
     count = int((by_class.get(action_name) or {}).get("success") or 0)
-    if count >= cap:
+    effective = cap
+    ramp = 1.0
+    if cap > 0:
+        ramp = _ramp_factor(age_days, _ramp_schedule())
+        if ramp < 1.0:
+            effective = max(1, int(cap * ramp))
+    if count >= effective:
+        detail = (
+            f"cap {cap} x ramp {ramp:g} (account age {age_days}d) = {effective}"
+            if ramp < 1.0
+            else f"cap {cap}"
+        )
         raise ReachError(
             QUOTA_EXCEEDED,
             f"quota cap exceeded for account {account} action_class {action_name}: "
-            f"{count} success in 24h (cap {cap})",
+            f"{count} success in 24h ({detail})",
         )
 
 

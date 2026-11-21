@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -155,6 +156,9 @@ def _classify_lane_error(raw: dict) -> ReachError:
     PERSISTED_QUERY_DEAD so it is never retried or paused.
     """
     message = str(raw.get("message") or "xactions lane failed")
+    # The child echoes proxy URLs (e.g. "proxy ... http://user:pass@host") —
+    # strip userinfo before it reaches the JSON envelope.
+    message = re.sub(r"://[^/\s:]+:[^@\s]+@", "://", message)
     lowered = message.lower()
     status = raw.get("status")
     if status == 429 or "rate limit" in lowered or "rate-limited" in lowered:

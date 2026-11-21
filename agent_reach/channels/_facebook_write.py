@@ -84,6 +84,12 @@ p.set("doc_id",__FB_DOC);
 p.set("server_timestamps","true");
 p.set("variables",JSON.stringify(vars));
 const KEY=__FB_KEY;
+// Sent sentinel: if a previous eval of this expression timed out at the
+// transport layer but actually executed, the retry must not fire the
+// mutation a second time — it returns early and the poll picks up the
+// in-flight result instead.
+if(window[KEY+"_sent"])return{sent:true,dup:true};
+window[KEY+"_sent"]=true;
 window[KEY]=null;
 fetch("/api/graphql/",{method:"POST",credentials:"include",
 headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":"ComposerStoryCreateMutation"},

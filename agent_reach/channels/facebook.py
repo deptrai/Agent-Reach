@@ -81,6 +81,24 @@ class FacebookChannel(OpenCLISiteChannel):
             (Param("url", "comment permalink (?comment_id=…) or raw comment id"),),
             (("opencli", "_uncomment"),),
         ),
+        Action(
+            "post-edit",
+            "Edit your own Facebook post text (audience preserved)",
+            (
+                Param("url", "facebook.com post permalink or raw story id"),
+                Param("text", "new post content"),
+            ),
+            (("opencli", "_post_edit"),),
+        ),
+        Action(
+            "post-delete",
+            "Delete your own Facebook post",
+            (
+                Param("url", "facebook.com post permalink or raw story id"),
+                Param("confirm", "pass --confirm to delete permanently", required=False, type=bool, default=False),
+            ),
+            (("opencli", "_post_delete"),),
+        ),
     )
 
     def _opencli_search(self, *, query: str, limit: int, timeout: float) -> list:
@@ -121,3 +139,13 @@ class FacebookChannel(OpenCLISiteChannel):
         from ._facebook_comment import facebook_uncomment
 
         return facebook_uncomment(url=url, timeout=timeout)
+
+    def _post_edit(self, *, url: str, text: str, timeout: float) -> list:
+        from ._facebook_post_edit import facebook_post_edit
+
+        return facebook_post_edit(url=url, text=text, timeout=timeout)
+
+    def _post_delete(self, *, url: str, confirm: bool, timeout: float) -> list:
+        from ._facebook_post_edit import facebook_post_delete
+
+        return facebook_post_delete(url=url, confirm=confirm, timeout=timeout)

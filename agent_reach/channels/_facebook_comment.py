@@ -130,6 +130,10 @@ p.set("doc_id",__FB_DOC);
 p.set("server_timestamps","true");
 p.set("variables",JSON.stringify(vars));
 const KEY=__FB_KEY;
+// Sent sentinel: a retried eval after a transport timeout must not re-fire
+// the mutation — return early; the poll picks up the in-flight result.
+if(window[KEY+"_sent"])return{sent:true,dup:true};
+window[KEY+"_sent"]=true;
 window[KEY]=null;
 fetch("/api/graphql/",{method:"POST",credentials:"include",
 headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
@@ -185,6 +189,10 @@ p.set("doc_id",__FB_DOC);
 p.set("server_timestamps","true");
 p.set("variables",JSON.stringify(vars));
 const KEY=__FB_KEY;
+// Sent sentinel: a retried eval after a transport timeout must not re-fire
+// the mutation — return early; the poll picks up the in-flight result.
+if(window[KEY+"_sent"])return{sent:true,dup:true};
+window[KEY+"_sent"]=true;
 window[KEY]=null;
 fetch("/api/graphql/",{method:"POST",credentials:"include",
 headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},

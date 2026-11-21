@@ -126,7 +126,12 @@ def _emit(payload: dict) -> int:
 def _usage(channel: Channel, action: Action) -> str:
     parts = ["agent-reach", channel.name, action.name]
     for p in action.params:
-        parts.append(f"<{p.name}>" if p.required else f"[--{p.name} {p.name.upper()}]")
+        if p.required:
+            parts.append(f"<{p.name}>")
+        elif p.type is bool:
+            parts.append(f"[--{p.name}]")
+        else:
+            parts.append(f"[--{p.name} {p.name.upper()}]")
     return " ".join(parts)
 
 
@@ -140,6 +145,8 @@ def _parse_action_args(action: Action, args: Sequence[str]) -> Dict[str, object]
         if p.required:
             # Join extra words so an unquoted multi-word query still works.
             parser.add_argument(p.name, nargs="+" if p.type is str else None)
+        elif p.type is bool:
+            parser.add_argument(f"--{p.name}", dest=p.name, action="store_true", default=None)
         else:
             parser.add_argument(f"--{p.name}", dest=p.name, default=None)
     parser.add_argument("--backend", choices=[b[0] for b in action.backends] +

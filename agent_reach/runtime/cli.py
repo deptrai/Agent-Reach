@@ -577,6 +577,8 @@ def _cmd_farm(args: Sequence[str]) -> int:
     parser.add_argument("sub", nargs="?")
     parser.add_argument("name", nargs="?")
     parser.add_argument("--proxy", default=None)
+    parser.add_argument("--no-seed", action="store_true")
+    parser.add_argument("--share-session", action="store_true")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--account", default=None)
@@ -624,8 +626,15 @@ def _cmd_farm(args: Sequence[str]) -> int:
     if ns.sub == "add":
         if not ns.name or not ns.proxy:
             return _bad_input(None, "farm account add",
-                              "usage: agent-reach farm account add <name> --proxy <url>")
-        return _mgmt("farm account add", farm.add_account, ns.name, ns.proxy)
+                              "usage: agent-reach farm account add <name> --proxy <url> [--no-seed] [--share-session]")
+        return _mgmt("farm account add", farm.add_account, ns.name, ns.proxy,
+                     seed=not ns.no_seed, share_session=ns.share_session)
+    if ns.sub == "seed":
+        if not ns.name or ns.proxy:
+            return _bad_input(None, "farm account seed",
+                              "usage: agent-reach farm account seed <name> [--share-session]")
+        return _mgmt("farm account seed", farm.seed_account_home, ns.name,
+                     share_session=ns.share_session)
     if ns.sub == "list":
         if ns.name or ns.proxy:
             return _bad_input(None, "farm account list", "usage: agent-reach farm account list")
@@ -641,7 +650,7 @@ def _cmd_farm(args: Sequence[str]) -> int:
                               "usage: agent-reach farm account ledger <name>")
         return _mgmt("farm account ledger", farm.ledger_24h, ns.name)
     return _bad_input(None, "farm account",
-                      "valid ops: add <name> --proxy <url>, list, env <name>, ledger <name>")
+                      "valid ops: add <name> --proxy <url>, seed <name>, list, env <name>, ledger <name>")
 
 
 def _cmd_fleet(args: Sequence[str]) -> int:

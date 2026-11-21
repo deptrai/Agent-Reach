@@ -25,6 +25,13 @@ Lặp lại cho từng account. `<acct>` là tên registry (`[a-zA-Z0-9][a-zA-Z0
 agent-reach farm account add <acct> --proxy http://user:pass@proxy-host:port
 ```
 
+`add` tự động **seed** runtime vào account HOME: license CloakBrowser, extension
+OpenCLI, và `browser/state.json` (sanitized) trỏ executable/launcher_python của
+operator — account không cần `browser setup` hay tải lại 400MB binary. Cờ:
+`--no-seed` (home trống hoàn toàn), `--share-session` (copy cả cookie snapshot —
+chỉ khi account dùng chung identity đã login của operator). Re-seed sau khi
+operator update extension/browser: `agent-reach farm account seed <acct>`.
+
 Proxy URL phải có scheme (`http`/`https`/`socks5`) + host + port. 1 proxy
 residential cho đúng 1 account — không chia sẻ proxy giữa các account.
 

@@ -516,7 +516,11 @@ def _launch(url: str, *, headless: bool = True) -> None:
                  "REACH_BROWSER_PROXY": os.environ.get("REACH_BROWSER_PROXY")
                      or str(Config(read_only=True).get("proxy") or ""),
                  "REACH_BROWSER_PORT": str(CDP_PORT),
-                 "CLOAKBROWSER_CACHE_DIR": str(browser_root().parent / "cloak-binaries")}, **_detach_kwargs(),
+                 "CLOAKBROWSER_CACHE_DIR": str(browser_root().parent / "cloak-binaries"),
+                 # Farm accounts share the operator's install via an absolute
+                 # path — the SDK honours this override and never re-downloads
+                 # a 400MB build under the swapped HOME.
+                 "CLOAKBROWSER_BINARY_PATH": exe}, **_detach_kwargs(),
         )
     if not wait_for(lambda: is_running() or proc.poll() is not None, START_WAIT, interval=0.2) or not is_running():
         tail = ""

@@ -189,7 +189,7 @@ def test_registry_path_and_wal_mode():
 
 def test_module_add_list_direct():
     row = farm.add_account("direct", "socks5://h:1080")
-    assert set(row) == ACCOUNT_FIELDS
+    assert set(row) == ACCOUNT_FIELDS | {"seed"}
     assert row["ban_status"] == "new"
     rows = farm.list_accounts()
     assert [r["name"] for r in rows] == ["direct"]

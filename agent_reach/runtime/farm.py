@@ -1,12 +1,15 @@
 """Multi-account farm registry: a SQLite-WAL accounts table under state.root()/"farm".
 
-Scope: add/list, per-account env resolution, and the actions_log ledger
-(record_action/ledger_24h). No container/netns work, and no credential or
-session copying — account rows plus an empty HOME skeleton.
+Scope: add/list, per-account env resolution, the actions_log ledger
+(record_action/ledger_24h), quota reservation, and onboarding seed
+(seed_account_home — small runtime files into the account HOME; binaries stay
+shared via absolute paths, session cookies only via --share-session).
+No container/netns work.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -129,8 +132,14 @@ def account_home(name: str) -> Path:
     return make_private_dir(accounts / name)
 
 
-def add_account(name: str, proxy: str) -> dict:
-    """Validate input, create the account HOME skeleton, and insert the registry row."""
+def add_account(name: str, proxy: str, *, seed: bool = True, share_session: bool = False) -> dict:
+    """Validate input, create the account HOME skeleton, and insert the registry row.
+
+    When `seed` is true (default), the operator's browser runtime is copied into
+    the account HOME via `seed_account_home` — small files only, binaries stay
+    shared. `share_session` additionally copies the operator's cookie snapshot
+    (same logged-in identity — explicit opt-in).
+    """
     _validate_name(name)
     _validate_proxy(proxy)
     home = farm_root() / "accounts" / name
@@ -159,7 +168,7 @@ def add_account(name: str, proxy: str) -> dict:
         if created:
             shutil.rmtree(home, ignore_errors=True)
         raise
-    return {
+    row = {
         "name": name,
         "proxy": proxy,
         "home": str(home),
@@ -168,6 +177,16 @@ def add_account(name: str, proxy: str) -> dict:
         "created_at": now,
         "updated_at": now,
     }
+    if not seed:
+        return row
+    try:
+        row["seed"] = seed_account_home(name, share_session=share_session)
+    except ReachError:
+        raise
+    except Exception as exc:
+        # Seed is best-effort onboarding sugar — never fail the registry write.
+        row["seed"] = {"account": name, "seeded": [], "error": str(exc)}
+    return row
 
 
 def list_accounts() -> list:
@@ -274,6 +293,90 @@ def account_age(name: str) -> Optional[int]:
         return int(row[0])
     except (TypeError, ValueError):
         return None
+
+
+# ── browser runtime seed (farm onboarding) ─────────────────────────────────
+#
+# A farm action runs with HOME swapped to the account's private dir, so a fresh
+# account would see an empty `.agent-reach` and fall into the full
+# install/download path (browser setup + extension fetch + a NEED_SETUP trip).
+# Seeding copies the SMALL files and records the operator's absolute binary
+# paths — the Chromium tree and the launcher venv stay shared, nothing heavy is
+# duplicated. The watcher pins CLOAKBROWSER_BINARY_PATH to that executable, so
+# the SDK never re-downloads under the account home either.
+
+_SEED_STATE_KEEP = frozenset({
+    "backend", "executable", "launcher_python",
+    "extension_asset", "extension_id", "extension_version",
+    "profile_backend", "headless",
+})
+
+_SEED_FILES = (
+    "cloak-binaries/license.key",
+    "cloak-binaries/.free_claim",
+    "cloak-binaries/.license_cache",
+)
+
+
+def _seed_copy(src_root: Path, dst_home: Path, rel: str, out: list) -> None:
+    src = src_root / rel
+    if not src.is_file():
+        return
+    dst = dst_home / ".agent-reach" / rel
+    make_private_dir(dst.parent)
+    shutil.copy2(src, dst)
+    if sys.platform != "win32":
+        os.chmod(dst, 0o600)
+    out.append(rel)
+
+
+def seed_account_home(name: str, *, share_session: bool = False) -> dict:
+    """Seed the operator's browser runtime into a farm account's HOME.
+
+    Copies the CloakBrowser license files, the OpenCLI extension bundle and a
+    sanitized browser/state.json (binary paths only — no session/context
+    fields). `browser/session.json` (the logged-in cookie snapshot) is NOT
+    copied unless `share_session=True`: cloning the operator's identity into a
+    farm account must be an explicit choice.
+
+    Unknown account → NEED_SETUP. An operator with no browser runtime seeds
+    nothing ({"seeded": []}) — onboarding still succeeds; the first action then
+    goes through the normal install path.
+    """
+    home = Path(account_env(name)["HOME"])
+    src_root = state.root()
+    seeded: list = []
+
+    for rel in _SEED_FILES:
+        _seed_copy(src_root, home, rel, seeded)
+
+    ext_src = src_root / "browser" / "extension"
+    if ext_src.is_dir():
+        dst = home / ".agent-reach" / "browser" / "extension"
+        make_private_dir(dst.parent)
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(ext_src, dst)
+        seeded.append("browser/extension")
+
+    try:
+        st = json.loads((src_root / "browser" / "state.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        st = None
+    if isinstance(st, dict) and st.get("backend"):
+        keep = {k: st[k] for k in sorted(_SEED_STATE_KEEP) if k in st}
+        dst = home / ".agent-reach" / "browser" / "state.json"
+        make_private_dir(dst.parent)
+        dst.write_text(json.dumps(keep, indent=2, sort_keys=True), "utf-8")
+        if sys.platform != "win32":
+            os.chmod(dst, 0o600)
+        seeded.append("browser/state.json")
+
+    if share_session:
+        _seed_copy(src_root, home, "browser/session.json", seeded)
+
+    return {"account": name, "seeded": seeded,
+            "seed_source": str(src_root)}
 
 
 _BUSY_RETRIES = 3

@@ -61,9 +61,9 @@ proxy. The invariant is about the egress *path*, not the observed address.
 | 1 — dispatch soft-check | Pre-flight at dispatch: proxy configured + non-empty + matches registry row, then a TCP handshake probe (5s, verdict cached ~60s). Failure → `PLATFORM_BLOCKED`, never direct. | Best-effort: catches misconfiguration and dead proxies at the application layer; cannot stop a kernel-level leak. | Implemented — `_enforce_proxy_kill_switch` (story 13.2) |
 | 2 — netns hard-enforce | Container/netns routing makes egress outside proxy_i impossible at the network layer. | Hard: the leak path does not exist. | Implemented — `farm-netns-killswitch` iptables rules (story 14.3) |
 
-Layer 1 without layer 2 is accepted risk during the env-injection phase
-(epic constraint C1): soft-check is the pre-flight guard, hard enforcement
-arrives with the container substrate.
+Layer 1 without layer 2 was accepted risk during the env-injection phase
+(epic constraint C1). Both layers are now shipped: the soft-check is the
+pre-flight guard, the container substrate (story 14.3) is the hard enforcement.
 
 ## 3. Ledger — rolling 24h, multi-writer
 
@@ -102,13 +102,13 @@ persisted-query doc-id / upstream GraphQL schema it replays has drifted
 - **Same-lane finality:** a dead persisted query does not un-die — retrying the
   identical replay on the same lane is prohibited. The error is final *for that
   lane*, not for the action.
-- **Route rule:** a run that fails with `PERSISTED_QUERY_DEAD` is eligible to be
-  routed to the fallback lane (XActions HTTP lane, initiative R12) *for that
-  account*. The routing itself is owned by epic-farm-resilience; this document
-  fixes only the rule.
-- **Fallback constraints (binding when it lands):** fallback egress **must** go
-  through the same account's proxy (no home-IP leak — initiative C3), and
-  fallback write attempts **must** be recorded in the ledger (§3).
+- **Route rule:** a run that fails with `PERSISTED_QUERY_DEAD` is routed once to
+  the fallback lane (XActions HTTP lane, initiative R12) *for that account*.
+  Implemented by epic-farm-resilience (stories 16.1/16.2, `xactions_lane.py`);
+  this document fixes the rule.
+- **Fallback constraints:** fallback egress **must** go through the same
+  account's proxy (no home-IP leak — initiative C3), and fallback write attempts
+  **must** be recorded in the ledger (§3).
 - Existing semantics are unchanged: `RATE_LIMITED` still means "stop and respect
   the cooldown", `PLATFORM_BLOCKED` still means "stop, human must resolve" —
   `PERSISTED_QUERY_DEAD` adds a third, lane-scoped terminal signal.
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
 | Layer-2 netns hard-enforce | Implemented | story 14.3 (`farm/container/netns-killswitch.sh`) |
 | `actions_log` schema, `record_action`, rolling-24h query, `ledger` CLI | Contract — bound here | story 11.5 |
 | `PERSISTED_QUERY_DEAD` error class in `result.py` | Contract — bound here | story 11.6 |
-| PQD → fallback routing, fallback lane wiring | **Deferred** (rule bound here) | epic-farm-resilience |
+| PQD → fallback routing, fallback lane wiring | Implemented | stories 16.1/16.2 (`xactions_bridge.py`, `xactions_lane.py`) |
 | Caps / warm-up enforcement reading the ledger | Implemented | stories 13.1 + 13.3 (`dispatch._enforce_write_quota`) |
 | `ban_status` transition automation | **Deferred** | epic-fleet-orchestration |
 | Container template, per-account netns/bridge bind | Implemented | stories 14.2 + 14.3 (`farm/container/`) |

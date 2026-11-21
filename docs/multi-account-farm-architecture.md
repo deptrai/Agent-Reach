@@ -95,16 +95,16 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 |---|---|---|
 | 5 | Write caps theo ngày (post/reply/like/follow per day) | ✅ Shipped (13.1): `actions_log` rolling-24h, `REACH_CAP_<CLASS>`/`DEFAULT_CAPS` — xem contract §6 |
 | 6 | Warm-up profile cho account mới | ✅ Shipped (13.3): cap scale theo `accounts.age` — d0–3: 25%, d4–7: 50%, d8–14: 75%, d15+: 100% (`REACH_RAMP`) |
-| 7 | Proxy kill-switch check | ✅ Layer-1 shipped (13.2): TCP handshake probe registry proxy → fail-closed `PLATFORM_BLOCKED` (không check exit-IP — residential proxy rotate IP; contract §2). Layer-2 netns còn ở epic-fleet |
+| 7 | Proxy kill-switch check | ✅ Shipped cả 2 layer: layer-1 (13.2) TCP handshake probe registry proxy → fail-closed `PLATFORM_BLOCKED` (không check exit-IP — residential proxy rotate IP; contract §2); layer-2 (14.3) iptables trong netns container — OUTPUT DROP, egress duy nhất là TCP tới proxy IP:port, DNS/DoT chết |
 
 ### 4c. Orchestration — ưu tiên trung bình
 
 | # | Việc | Ghi chú |
 |---|---|---|
-| 8 | Container template (Docker/Podman) | ✅ Shipped (14.2): `farm/container/` — HOME riêng, volume `~/.agent-reach` riêng, `REACH_BROWSER_PROXY`, cap 1.5GB; netns riêng còn ở 14.3 |
-| 9 | Fleet manager: health per container (browser up? proxy alive? session valid? cooldown state?) | Tận dụng `agent-reach check` output JSON — poll định kỳ, alert container đỏ |
-| 10 | Session refresh / re-login automation | `onboarding.py` + login flow đã designed-for-agent; cần job detect `NEED_LOGIN` và mở login window trong container tương ứng |
-| 11 | Metrics ban-rate | Log per-account: action/ngày, RATE_LIMITED events, PLATFORM_BLOCKED, ban/suspend → dashboard tối giản |
+| 8 | Container template (Docker/Podman) | ✅ Shipped (14.2 + 14.3): `farm/container/` — HOME riêng, volume `~/.agent-reach` riêng, `REACH_BROWSER_PROXY`, cap 1.5GB, netns riêng + iptables kill-switch. Runbook nhân bản 2→N: `docs/farm-scale-runbook.md` (14.6) |
+| 9 | Fleet manager: health per container (browser up? proxy alive? session valid? cooldown state?) | ✅ Shipped (14.4): `agent-reach fleet poll` poll `agent-reach check` JSON từng container, `fleet list` là health view, `fleet relogin` mở lại login window |
+| 10 | Session refresh / re-login automation | ✅ Shipped (14.4): poll detect `NEED_LOGIN` → 1 lần `docker exec -d ... agent-reach login <channel>` trong container đó, `pending_login` chống refire |
+| 11 | Metrics ban-rate | ✅ Shipped (14.5): `agent-reach farm metrics` — actions/errors per account + fleet health, JSON sink file |
 
 ### 4d. Redundancy & tài liệu
 

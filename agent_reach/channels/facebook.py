@@ -99,6 +99,16 @@ class FacebookChannel(OpenCLISiteChannel):
             ),
             (("opencli", "_post_delete"),),
         ),
+        Action(
+            "share",
+            "Share a Facebook post to your timeline",
+            (
+                Param("url", "facebook.com post URL"),
+                Param("text", "optional caption for the share", required=False, default=""),
+                Param("audience", "only_me | friends | public", required=False, default="only_me"),
+            ),
+            (("opencli", "_share"),),
+        ),
     )
 
     def _opencli_search(self, *, query: str, limit: int, timeout: float) -> list:
@@ -149,3 +159,12 @@ class FacebookChannel(OpenCLISiteChannel):
         from ._facebook_post_edit import facebook_post_delete
 
         return facebook_post_delete(url=url, confirm=confirm, timeout=timeout)
+
+    def _share(self, *, url: str, text: str, audience: str, timeout: float) -> list:
+        if audience not in ("only_me", "friends", "public"):
+            from agent_reach.runtime.result import BAD_INPUT, ReachError
+
+            raise ReachError(BAD_INPUT, "audience must be one of: only_me, friends, public")
+        from ._facebook_share import facebook_share
+
+        return facebook_share(url=url, text=text or "", audience=audience, timeout=timeout)

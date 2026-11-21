@@ -31,6 +31,7 @@ import re
 import time
 import urllib.parse
 
+from agent_reach.runtime import query_ids
 from agent_reach.runtime.result import (
     BAD_INPUT,
     UPSTREAM_BROKEN,
@@ -56,7 +57,8 @@ from ._facebook_write import (
     send_mutation,
 )
 
-# Persisted-query ids, one per mutation (rotate with FB builds).
+# Persisted-query ids, one per mutation (rotate with FB builds). Fallback
+# defaults — query-ids.json overrides them at send time (hot reload).
 _DOC = {
     "create": ("useCometUFICreateCommentMutation", "29145340888419828"),
     "delete": ("useCometUFIDeleteCommentMutation", "28931450023144805"),
@@ -191,6 +193,7 @@ def _resolve_comment_id(target_id: str, url: str, timeout: float) -> str:
 def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> dict:
     """Fire-and-poll one comment mutation; returns the parsed page result."""
     friendly, doc_id = _DOC[kind]
+    doc_id = query_ids.get("facebook", f"comment_{kind}", doc_id)
     key = _result_key("__fbCommentResult")
     expr = (
         _JS[kind]

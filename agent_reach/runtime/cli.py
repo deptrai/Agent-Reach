@@ -63,7 +63,9 @@ For the user:
   agent-reach farm account add|list|env|ledger   multi-account farm registry
   agent-reach browser profiles|use ID    choose an existing local login source
   agent-reach skill [link|unlink <dir>]   where the agent skill is; link it for another AI, or unlink one for good
-  agent-reach doctor [--text]             status of every channel and installed tool versions (no network)
+  agent-reach doctor [--text] [--probe-docids]
+                                          status of every channel and installed tool versions
+                                          (offline; --probe-docids adds one live doc-id drift probe)
   agent-reach check [channel] [--text]    live-test channels; --search tests search/jobs only
   agent-reach update [--check]            upgrade Agent Reach, every added channel's tools and the skill
   agent-reach configure <key> [value]     groq-key | openai-key | proxy | github-token | browser-port
@@ -274,13 +276,15 @@ def _cmd_doctor(args: Sequence[str]) -> int:
 
     parser = _Parser(prog="doctor", add_help=False)
     parser.add_argument("--text", action="store_true")
+    parser.add_argument("--probe-docids", action="store_true",
+                        help="Also fire one live persisted-query drift probe (network; needs the FB session)")
     try:
         ns = parser.parse_args(list(args))
     except _ArgError as exc:
         return _bad_input(None, "doctor", str(exc))
     if not ns.text:
-        return _mgmt("doctor", manage.doctor)
-    result = manage.doctor()
+        return _mgmt("doctor", manage.doctor, probe_doc_ids=ns.probe_docids)
+    result = manage.doctor(probe_doc_ids=ns.probe_docids)
     sys.stdout.write(f"Agent Reach {result['version']}\n\n")
     for c in result["channels"]:
         extra = "; ".join(c["problems"]) or c.get("hint", "")
@@ -291,6 +295,12 @@ def _cmd_doctor(args: Sequence[str]) -> int:
         sys.stdout.write("\nTools\n")
         for t in result["tools"]:
             sys.stdout.write(f"{t['tool']:<16} {str(t.get('version') or '?'):<12} {t.get('owner', '')}\n")
+    drift = result.get("doc_id_drift")
+    if drift is not None:
+        mark = "STALE" if drift.get("stale") else ("unprobed" if drift.get("error") else "fresh")
+        detail = drift.get("hint") or drift.get("error") or ""
+        sys.stdout.write(f"\nDoc-id drift probe ({drift.get('probed')}): {mark}"
+                         f" [{drift.get('verdict')}] {detail}\n")
     return 0
 
 

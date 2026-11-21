@@ -29,6 +29,7 @@ import json
 import re
 import time
 
+from agent_reach.runtime import query_ids
 from agent_reach.runtime.result import (
     BAD_INPUT,
     UPSTREAM_BROKEN,
@@ -50,6 +51,7 @@ from ._facebook_write import (
 )
 
 # Persisted-query ids for the two mutations (rotates with FB builds).
+# Fallback defaults — query-ids.json overrides them at send time (hot reload).
 _DOC = {
     "edit": ("ComposerStoryEditMutation", "30241673288768290"),
     "delete": ("useCometFeedStoryDeleteMutation", "29557927263819997"),
@@ -350,6 +352,7 @@ def _check_ownership(story_uid: str | None, session_uid: str | None) -> None:
 def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> dict:
     """Fire-and-poll one post mutation; returns the parsed page result."""
     friendly, doc_id = _DOC[kind]
+    doc_id = query_ids.get("facebook", f"post_{kind}", doc_id)
     key = _result_key("__fbPostResult")
     expr = (
         _JS[kind]

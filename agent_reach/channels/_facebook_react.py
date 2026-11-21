@@ -26,6 +26,7 @@ import re
 import time
 import urllib.parse
 
+from agent_reach.runtime import query_ids
 from agent_reach.runtime.result import (
     BAD_INPUT,
     UPSTREAM_BROKEN,
@@ -45,6 +46,7 @@ from ._facebook_write import (
     send_mutation,
 )
 
+# Fallback default — query-ids.json overrides it at send time (hot reload).
 _DOC_ID = "27646120298312844"
 _FRIENDLY = "CometUFIFeedbackReactMutation"
 
@@ -242,7 +244,7 @@ def _send_reaction(target_id: str, *, fid: str, rid: str, deadline: float) -> di
         .replace("__FB_FID", json.dumps(fid))
         .replace("__FB_RID", json.dumps(rid))
         .replace("__FB_FRIENDLY", json.dumps(_FRIENDLY))
-        .replace("__FB_DOC", json.dumps(_DOC_ID))
+        .replace("__FB_DOC", json.dumps(query_ids.get("facebook", "react", _DOC_ID)))
         .replace("__FB_KEY", json.dumps(key))
     )
     return send_mutation(target_id, expr, deadline=deadline, key=key, label="Reaction", eval_fn=_eval)

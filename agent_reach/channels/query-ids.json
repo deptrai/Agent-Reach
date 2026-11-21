@@ -1,0 +1,13 @@
+{
+  "_comment": "Persisted-query ids currently baked into the code. The runtime does NOT read this file — copy it to ~/.agent-reach/query-ids.json (per state.root(); a farm account's own .agent-reach dir under REACH_ACCOUNT) and edit ids there. The file is re-read on every send (hot reload).",
+  "facebook": {
+    "post_create": "29221801510819514",
+    "share": "29304741702489334",
+    "react": "27646120298312844",
+    "comment_create": "29145340888419828",
+    "comment_delete": "28931450023144805",
+    "post_edit": "30241673288768290",
+    "post_delete": "29557927263819997"
+  },
+  "x": {}
+}

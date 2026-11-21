@@ -245,8 +245,42 @@ def channel_status(ch, data: dict) -> dict:
     return {"status": "unverified", "problems": [], "hint": f"agent-reach check {ch.name}"}
 
 
-def doctor() -> dict:
-    """Status of every channel from local state only (no network); `check` runs the live tests."""
+def _doc_id_drift() -> dict:
+    """Opt-in live drift probe: is the persisted-query doc_id still accepted?
+
+    Fires ONE in-page GraphQL probe on a facebook.com tab (empty variables — a
+    live doc fails validation, a dead doc_id answers 'document not found' /
+    404). A single target can only report "single-account": this session's id
+    is provably dead-or-alive, but one account cannot distinguish a global
+    rotation from a per-account variant — that takes the same doc_id probed
+    from ≥2 accounts (each in its own session/HOME).
+    """
+    from . import query_ids
+
+    try:
+        from agent_reach.channels import _facebook_write as fw
+
+        deadline, left, tid = fw.fb_write_target(30.0)
+        result = query_ids.probe_facebook(tid, fw._eval, timeout=left(20))
+        result["stale"] = query_ids.dead_document(result)
+    except Exception as exc:  # noqa: BLE001 — a failed probe must not break doctor
+        return {"probed": "facebook", "results": [], "verdict": "unprobed", "error": str(exc)[:300]}
+    results = [{"target": "current-session", **result}]
+    stale = bool(result.get("stale"))
+    return {
+        "probed": "facebook",
+        "results": results,
+        "verdict": query_ids.drift_verdict(results),
+        "stale": stale,
+        "hint": "re-capture skeleton / update doc-id config (~/.agent-reach/query-ids.json)" if stale else "",
+    }
+
+
+def doctor(probe_doc_ids: bool = False) -> dict:
+    """Status of every channel from local state only (no network); `check` runs the live tests.
+
+    `probe_doc_ids` opts into ONE live doc-id probe per run (network) — plain
+    doctor stays offline."""
     data = state.load()
     channels = []
     registered = _channels()
@@ -258,7 +292,8 @@ def doctor() -> dict:
     from .onboarding import capability_summary
 
     return {"version": __version__, "channels": channels, "tools": tools.recorded(),
-            "capability_summary": capability_summary(registered, channels)}
+            "capability_summary": capability_summary(registered, channels),
+            "doc_id_drift": _doc_id_drift() if probe_doc_ids else None}
 
 
 # ── add / remove ──

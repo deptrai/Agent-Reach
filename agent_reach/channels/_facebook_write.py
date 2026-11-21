@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from agent_reach.runtime import query_ids
 from agent_reach.runtime.result import (
     NEED_LOGIN,
     PERSISTED_QUERY_DEAD,
@@ -33,6 +34,7 @@ from agent_reach.runtime.result import (
 )
 
 # Persisted-query id for ComposerStoryCreateMutation (rotates with FB builds).
+# Fallback default — query-ids.json overrides it at send time (hot reload).
 _DOC_ID = "29221801510819514"
 
 _AUDIENCE = {"only_me": "SELF", "friends": "FRIENDS", "public": "EVERYONE"}
@@ -403,7 +405,7 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
     expr = (
         _POST_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
         .replace("__FB_AUD", json.dumps(_AUDIENCE[audience]))
-        .replace("__FB_DOC", json.dumps(_DOC_ID))
+        .replace("__FB_DOC", json.dumps(query_ids.get("facebook", "post_create", _DOC_ID)))
         .replace("__FB_KEY", json.dumps(key))
         .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
     )

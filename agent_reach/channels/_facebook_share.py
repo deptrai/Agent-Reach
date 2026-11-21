@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import time
 
+from agent_reach.runtime import query_ids
 from agent_reach.runtime.result import (
     BAD_INPUT,
     UPSTREAM_BROKEN,
@@ -48,6 +49,7 @@ from ._facebook_write import (
     send_mutation,
 )
 
+# Fallback default — query-ids.json overrides it at send time (hot reload).
 _DOC_ID = "29304741702489334"
 _FRIENDLY = "ComposerStoryCreateMutation"
 
@@ -130,7 +132,7 @@ def _send_share(target_id: str, *, post_id: str, text: str, audience: str, deadl
         .replace("__FB_POST", post_id)
         .replace("__FB_AUD", json.dumps(_AUDIENCE[audience]))
         .replace("__FB_FRIENDLY", json.dumps(_FRIENDLY))
-        .replace("__FB_DOC", json.dumps(_DOC_ID))
+        .replace("__FB_DOC", json.dumps(query_ids.get("facebook", "share", _DOC_ID)))
         .replace("__FB_KEY", json.dumps(key))
         # __FB_TEXT last: user text could itself contain another sentinel.
         .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))

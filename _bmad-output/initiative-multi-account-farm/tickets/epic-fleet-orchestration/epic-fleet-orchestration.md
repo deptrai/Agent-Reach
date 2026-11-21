@@ -37,7 +37,8 @@ Chủ farm nhân bản 1 account thành N container bằng template, nhìn 1 ch�
 - Dependencies authoritative: `tickets/tickets.toml`.
 - Procurement proxy pool và nâng RAM server là việc con người — hitl entry khi plan stories.
 - Must not change: bridge contract `127.0.0.1:19825` (tách bằng netns, không đổi port/config trong code); registry schema của epic 11.
-- Touch point: `agent_reach/runtime/onboarding.py` (login flow designed-for-agent), `browser_watcher.py` (proxy launch, CloakBrowser), `bridge.py` (singleton → netns), `runtime/tools.py` (version pin C7), registry của epic 11.
+- Touch point: `agent_reach/runtime/onboarding.py` (login flow designed-for-agent), `browser_watcher.py` (proxy launch, browser backend), `bridge.py` (singleton → netns), `runtime/tools.py` (version pin C7), registry của epic 11.
+- Browser vendor (C2): **spike đầu epic** chọn giữa CloakBrowser (upstream-tested, freemium — free key 1 profile, Pro cho scale) và ShardBrowser (MIT free, `ProxyShard/ShardBrowser` — patched Chromium 158, engine-level spoof, profile API + per-profile proxy khớp farm model). Spike verify: OpenCLI extension load được + CDP endpoint tương thích `dedicated_context`/`bound_context` + fingerprint profile kích hoạt qua đường nào (bare binary vs launcher API — nếu chỉ qua launcher API → cần backend `shard.py` connect_over_cdp thay `--chrome` flag) + fingerprint scan (browserscan/fingerprintjs) trên ≥1 profile. Kết quả ghi Decision + sửa `backends/cloak.py`/`tools.py` tương ứng.
 
 ## References
 

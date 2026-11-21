@@ -17,7 +17,7 @@ Agent-Reach hiện chạy single-account trên 1 máy (bridge OpenCLI là single
 
 ## Outcome
 
-Chủ farm vận hành được 30–80 account X song song trên 1 home server với stealth tối đa — fingerprint thật (CloakBrowser), IP sạch per-account, hành vi cap theo ngày — và farm không chết hàng loạt khi platform đổi doc-id hay 1 mutation gãy.
+Chủ farm vận hành được 30–80 account X song song trên 1 home server với stealth tối đa — fingerprint thật (anti-detect Chromium), IP sạch per-account, hành vi cap theo ngày — và farm không chết hàng loạt khi platform đổi doc-id hay 1 mutation gãy.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ Chủ farm vận hành được 30–80 account X song song trên 1 home server 
 ## Constraints
 
 - C1 (§3): Kiến trúc all-Reach single-tier — mỗi account = 1 container riêng (HOME riêng, `~/.agent-reach` riêng, proxy riêng, bridge `127.0.0.1:19825` riêng trong network namespace riêng); không share OS-level bridge.
-- C2 (§3, §5): Dedicated browser = CloakBrowser bắt buộc — fingerprint correlation giữa các container không giải quyết bằng proxy; cấm Chrome/Chromium thường.
+- C2 (§3, §5): Dedicated browser = anti-detect Chromium fork bắt buộc — fingerprint correlation giữa các container không giải quyết bằng proxy; cấm Chrome/Chromium thường. Vendor: CloakBrowser (upstream-tested nhưng freemium — free key 1 profile, Pro cho scale) hoặc ShardBrowser (MIT, profile API + per-profile proxy native) — chốt bằng spike ở epic-fleet-orchestration.
 - C3 (§3): Proxy residential/ISP 1:1 per account với kill-switch fail-closed; cấm datacenter proxy (tín hiệu farm mạnh).
 - C4 (§4a, pattern `_facebook_write.py`): Write actions replay mutation thật trong dedicated browser với live tokens; fire-and-poll, cấm blind retry.
 - C5 (§3): XActions HTTP lane chỉ là fallback khi replay gãy — Node.js TLS fingerprint ≠ Chrome JA3, không dùng làm lane chính.
@@ -87,3 +87,5 @@ Chủ farm vận hành được 30–80 account X song song trên 1 home server 
 - Decision: 2026-11-21 — drift monitor chạy host-level 1 instance (doc-id global theo platform); version pin OpenCLI nằm ở container template epic-fleet-orchestration (C7), playbook epic-farm-resilience chỉ cover quy trình canary.
 - Decision: 2026-11-21 — REPLAN sau party critique (5/5 persona hội tụ): slice 4→6 epic; thêm `epic-account-substrate` (R15 registry + contracts) làm baseline thật; tách R2 ra `epic-platform-lanes`; thứ tự R2 LinkedIn→Reddit→Instagram, TikTok sau spike; kill-switch contract "zero egress ngoài proxy_i" (dispatch soft + netns hard); live verify gate = designated test account cho tới khi guardrails xong; scale gate ≥4 container + runbook về epic-fleet-orchestration.
 - Decision: 2026-11-21 — apply-all round 1 elicitation (`elicitation-farm-slice/`): renumber epic-farm-resilience sang id=6 + dùng slug refs; thêm edge epic3→epic2 và epic4→epic2; verify substrate đổi tuần tự + contract ghi isolation mechanism; contract ledger thêm concurrency model + chỉ đếm success + fallback ghi ledger; externalize gồm cả read queryIds + probe ≥2 account; error class `PERSISTED_QUERY_DEAD` route vào fallback; runbook cap ≤20 tới khi epic 6 live; thêm identity bridge Reach↔XActions; delineate drift doctor-vs-monitor; `age` populate ở epic 1 + ghi engagement warm-up là known gap.
+- Decision: 2026-11-21 — C2 nới vendor: CloakBrowser hóa ra freemium (free key 1 profile, Pro cho scale — README CloakHQ) → không phù hợp farm 30–80; mở đường ShardBrowser (`ProxyShard/ShardBrowser`, MIT, profile API + per-profile proxy native). Chốt bằng spike đầu epic-fleet-orchestration: verify OpenCLI extension load + CDP tương thích `dedicated_context` + fingerprint kích hoạt qua đường nào + fingerprint scan.
+- Decision: 2026-11-21 — renumber epic ids 1–6 → 11–16 tránh trùng story ref "x.y" với initiative-facebook-write đang build song song (commit c62beef).

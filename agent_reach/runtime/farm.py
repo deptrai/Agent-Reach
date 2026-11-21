@@ -1,7 +1,8 @@
 """Multi-account farm registry: a SQLite-WAL accounts table under state.root()/"farm".
 
-Story 1 scope: add/list only. No ledger table, no container/netns work, and no
-credential or session copying — account rows plus an empty HOME skeleton.
+Scope so far: add/list plus per-account env resolution. No ledger table, no
+container/netns work, and no credential or session copying — account rows plus
+an empty HOME skeleton.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from urllib.parse import urlparse
 from agent_reach.utils.paths import ensure_no_symlink_path, make_private_dir
 
 from . import state
-from .result import BAD_INPUT, UPSTREAM_BROKEN, ReachError
+from .result import BAD_INPUT, NEED_SETUP, UPSTREAM_BROKEN, ReachError
 
 _NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}")
 _PROXY_SCHEMES = frozenset({"http", "https", "socks5"})
@@ -134,3 +135,29 @@ def list_accounts() -> list:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(f"SELECT {_COLUMNS} FROM accounts ORDER BY name").fetchall()
     return [dict(row) for row in rows]
+
+
+def account_env(name: str) -> dict:
+    """Resolve the env dict dispatch applies for one registered account.
+
+    HOME is the registry `home` column made absolute (no symlink resolution, so
+    it stays identical to what `add`/`list` report); REACH_BROWSER_PROXY is only
+    present when the row stores a non-empty proxy. Unknown account -> NEED_SETUP.
+    """
+    _validate_name(name)
+    with closing(connect()) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT proxy, home FROM accounts WHERE name = ?", (name,)
+        ).fetchone()
+    if row is None:
+        raise ReachError(
+            NEED_SETUP,
+            f"unknown farm account: {name}",
+            hint=f"Run `agent-reach farm account add {name} --proxy <url>` first.",
+        )
+    env = {"HOME": str(Path(row["home"] or farm_root() / "accounts" / name).absolute())}
+    if row["proxy"]:
+        env["REACH_BROWSER_PROXY"] = row["proxy"]
+    env["REACH_ACCOUNT"] = name
+    return env

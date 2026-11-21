@@ -324,7 +324,14 @@ def _deleted_comment(out: dict) -> bool:
 
 def _check_graphql(kind: str, out: dict) -> None:
     """Map transport/GraphQL failures onto Reach errors (shared by both kinds)."""
-    classify_result(out, label="comment mutation", name=_DOC[kind][0])
+    classify_result(
+        out,
+        label="comment mutation",
+        name=_DOC[kind][0],
+        # Positive confirmation wins over non-fatal errors[] — otherwise a
+        # successful create/delete reports UPSTREAM_BROKEN and retries duplicate.
+        confirmed=(lambda: bool(out.get("commentId"))) if kind == "create" else (lambda: _deleted_comment(out)),
+    )
 
     if kind == "delete" and not _deleted_comment(out):
         raise ReachError(

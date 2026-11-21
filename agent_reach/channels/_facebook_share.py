@@ -167,7 +167,10 @@ def _send_share(target_id: str, *, post_id: str, text: str, audience: str, deadl
     key = _result_key("__fbShareResult")
     expr = (
         _SEND_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
-        .replace("__FB_POST", json.dumps(post_id))
+        # Splice raw — post_id is guaranteed [0-9]+ by _post_id_of, and the
+        # captured shape is a numeric array element (["<id>"] quoted form is a
+        # divergence from the real payload).
+        .replace("__FB_POST", post_id)
         .replace("__FB_AUD", json.dumps(_AUDIENCE[audience]))
         .replace("__FB_FRIENDLY", json.dumps(_FRIENDLY))
         .replace("__FB_DOC", json.dumps(_DOC_ID))
@@ -181,7 +184,12 @@ def _send_share(target_id: str, *, post_id: str, text: str, audience: str, deadl
 def _share_result(out: dict, *, post_id: str, text: str, audience: str) -> list:
     """Map the GraphQL page result onto Reach errors / a result item."""
     status = out.get("status")
-    classify_result(out, label="share", name=_FRIENDLY)
+    classify_result(
+        out,
+        label="share",
+        name=_FRIENDLY,
+        confirmed=lambda: bool(out.get("storyUrl") or out.get("storyId") or out.get("newPostId") or out.get("postId")),
+    )
 
     # GraphQL returned data — a share that created no new story must not
     # report success (fail-closed, same as facebook_post).

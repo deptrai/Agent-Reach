@@ -127,7 +127,9 @@ def test_http_5xx_maps_to_upstream_broken(harness):
 
 
 def test_graphql_errors_map_to_upstream_broken(harness):
-    harness["poll_results"] = [ok_result(errors=[{"message": "missing_required_variable_value"}])]
+    harness["poll_results"] = [
+        ok_result(storyUrl=None, storyId=None, newPostId=None, postId=None, errors=[{"message": "missing_required_variable_value"}])
+    ]
     with pytest.raises(ReachError) as exc:
         fw.facebook_post(text="x", audience="only_me", timeout=30)
     assert exc.value.code == UPSTREAM_BROKEN
@@ -135,7 +137,9 @@ def test_graphql_errors_map_to_upstream_broken(harness):
 
 
 def test_login_shaped_graphql_error_maps_to_need_login(harness):
-    harness["poll_results"] = [ok_result(errors=[{"message": "Login required to continue"}])]
+    harness["poll_results"] = [
+        ok_result(storyUrl=None, storyId=None, newPostId=None, postId=None, errors=[{"message": "Login required to continue"}])
+    ]
     with pytest.raises(ReachError) as exc:
         fw.facebook_post(text="x", audience="only_me", timeout=30)
     assert exc.value.code == NEED_LOGIN

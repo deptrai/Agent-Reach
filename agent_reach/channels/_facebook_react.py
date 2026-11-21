@@ -74,18 +74,32 @@ const ids=[];let m;
 while((m=re.exec(h))){const v=m[1]||m[2];if(ids.indexOf(v)<0){ids.push(v);if(ids.length>=16)break}}
 let fid=ids[0]||null;
 const cid=__FB_CID;
+// Comment node ids decode to "comment:<post>_<cid>" — scan base64 blobs (same
+// pattern as _facebook_comment._COMMENT_LOCATE_JS); btoa("comment:"+cid) can
+// never match that form. cidBound=false when a comment id was requested but
+// no matching node exists on the page — callers must not fall back to the
+// post's fid (that would write to the wrong target).
+let cidBound=!cid;
 if(cid&&fid){
 try{
-const nodeId=btoa("comment:"+cid);
-const ni=h.indexOf(nodeId);
-if(ni>=0){
+const cre=/Y29tbWVud[A-Za-z0-9+/_=-]{6,200}/g;
+let nm;
+while((nm=cre.exec(h))){
+const v=nm[0];
+let d="";
+try{d=atob(v.replace(/-/g,"+").replace(/_/g,"/"));}catch(e){continue}
+const mm=/^comment:[0-9]+_([0-9]+)$/.exec(d);
+if(mm&&mm[1]===cid){
+const ni=nm.index;
 const seg=h.slice(Math.max(0,ni-4000),ni+12000);
 const cm=seg.match(/"feedback_id":"([^"]+)"|&quot;feedback_id&quot;:&quot;([^&]+)&quot;/)||seg.match(/"feedback":\{"id":"([^"]+)"\}|&quot;feedback&quot;:{&quot;id&quot;:&quot;([^&]+)&quot;}/);
-if(cm){const cv=cm[1]||cm[2];if(cv&&cv!==fid&&ids.indexOf(cv)>=0)fid=cv;}
+if(cm){const cv=cm[1]||cm[2]||cm[3]||cm[4];if(cv&&cv!==fid&&ids.indexOf(cv)>=0){fid=cv;cidBound=true;}}
+break;
+}
 }
 }catch(e){}
 }
-return JSON.stringify({href:location.href,fid:fid,count:ids.length});
+return JSON.stringify({href:location.href,fid:fid,cidBound:cidBound,count:ids.length});
 }catch(e){return JSON.stringify({error:String(e)})}})()
 """
 
@@ -251,6 +265,11 @@ def _resolve_feedback_id(target_id: str, url: str, timeout: float) -> str:
         except (TypeError, ValueError):
             info = {}
         if info.get("fid"):
+            if info.get("cidBound") is False:
+                raise ReachError(
+                    UPSTREAM_BROKEN,
+                    "Comment node not found on the page — refusing to target the parent post",
+                )
             return info["fid"]
         last = info
         time.sleep(0.8)
@@ -278,7 +297,14 @@ def _send_reaction(target_id: str, *, fid: str, rid: str, deadline: float) -> di
 def _reaction_result(out: dict, *, url: str, reaction: str | None, rid: str) -> list:
     """Map the GraphQL page result onto Reach errors / a result item."""
     status = out.get("status")
-    classify_result(out, label="reaction", name=_FRIENDLY)
+    classify_result(
+        out,
+        label="reaction",
+        name=_FRIENDLY,
+        # Positive signal wins over non-fatal errors[]: react confirms via
+        # reactionId, unreact via a cleared/missing reaction state.
+        confirmed=lambda: bool(out.get("reactionId")) if reaction is not None else out.get("reactionId") is None,
+    )
 
     # GraphQL returned data — verify the reaction state actually changed, so a
     # duplicate react / silent no-op cannot masquerade as ok:true.

@@ -333,7 +333,16 @@ def facebook_post(*, text: str, audience: str, timeout: float) -> list:
         .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
     )
     out = send_mutation(target["id"], expr, deadline=deadline, key=key, label="Post", dup_hint=True)
-    classify_result(out, label="post", name="ComposerStoryCreateMutation")
+    classify_result(
+        out,
+        label="post",
+        name="ComposerStoryCreateMutation",
+        # FB attaches non-fatal errors to payloads that still confirm the
+        # mutation — positive story refs must win over errors[] (same contract
+        # post-edit uses) or a successful post reports failure and retries
+        # duplicate it.
+        confirmed=lambda: bool(out.get("storyUrl") or out.get("storyId") or out.get("newPostId") or out.get("postId")),
+    )
 
     status = out.get("status")
 

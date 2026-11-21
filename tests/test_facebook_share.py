@@ -102,7 +102,7 @@ def test_share_success_returns_item(harness):
     assert '"share_type":22' in send
     # id is concatenated as a string — Number() would round past 2^53
     assert 'share_params":[' in send
-    assert f'+"{POST_ID}"+' in send
+    assert f'+{POST_ID}+' in send
 
 
 @pytest.mark.parametrize("audience,state", [
@@ -129,7 +129,7 @@ def test_text_substituted_last_does_not_clobber_post(harness):
     fs.facebook_share(url=POST_URL, text="__FB_POST", audience="only_me", timeout=30)
     send = harness["send"][0]
     assert 'text:"__FB_POST"' in send
-    assert f'+"{POST_ID}"+' in send
+    assert f'+{POST_ID}+' in send
 
 
 def test_bad_audience_rejected_before_browser(harness):
@@ -184,7 +184,7 @@ def test_post_id_resolved_from_page_when_url_has_none(harness):
     pfbid_url = "https://www.facebook.com/SomePage/posts/pfbid02abcXYZ"
     fs.facebook_share(url=pfbid_url, text="", audience="only_me", timeout=30)
     assert harness["locate"], "expected the post_id locate eval"
-    assert '+"555777999888"+' in harness["send"][0]
+    assert '+555777999888+' in harness["send"][0]
 
 
 def test_no_post_id_anywhere_is_upstream_broken(harness):
@@ -250,7 +250,7 @@ def test_http_5xx_maps_to_upstream_broken(harness):
 
 def test_graphql_errors_map_to_upstream_broken(harness):
     harness["poll_results"] = [
-        ok_result(errors=[{"message": "The story is no longer available"}])
+        ok_result(storyUrl=None, storyId=None, errors=[{"message": "The story is no longer available"}])
     ]
     with pytest.raises(ReachError) as exc:
         fs.facebook_share(url=POST_URL, text="", audience="only_me", timeout=30)
@@ -258,7 +258,7 @@ def test_graphql_errors_map_to_upstream_broken(harness):
 
 
 def test_login_error_in_graphql_maps_to_need_login(harness):
-    harness["poll_results"] = [ok_result(errors=[{"message": "Session invalid — please login"}])]
+    harness["poll_results"] = [ok_result(storyUrl=None, storyId=None, errors=[{"message": "Session invalid — please login"}])]
     with pytest.raises(ReachError) as exc:
         fs.facebook_share(url=POST_URL, text="", audience="only_me", timeout=30)
     assert exc.value.code == NEED_LOGIN

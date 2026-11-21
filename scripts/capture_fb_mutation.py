@@ -16,7 +16,7 @@ Then do the action once in that browser (click Like, post a comment, ...).
 The script dumps every captured mutation name; matching bodies are parsed,
 sanitized (actor_id -> "0", UUIDs -> zero, epoch timestamps -> 0,
 attribution_id_v2 -> template) and written as {"params": ..., "variables": ...}
-— the same shape as `_facebook_vars.json`, so the params template survives a
+— the same shape as `_fb_post_create_vars.json`, so the variables skeleton survives a
 re-capture instead of silently degrading to variables-only.
 """
 

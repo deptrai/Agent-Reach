@@ -38,20 +38,22 @@ from agent_reach.runtime.result import (
     make_item,
 )
 
+from ._facebook_react import (
+    _FB_HOST_RE,
+    _check_url,
+    _ensure_post_loaded,
+    _resolve_feedback_id,
+)
 from ._facebook_write import (
     _eval,
     _fb_target,
     _result_key,
     _wait_ready,
     classify_result,
+    fb_send_js,
+    fb_write_target,
     load_skeleton_sections,
-    prepare_facebook,
     send_mutation,
-)
-from ._facebook_react import (
-    _check_url,
-    _ensure_post_loaded,
-    _resolve_feedback_id,
 )
 
 # Persisted-query ids, one per mutation (rotate with FB builds).
@@ -61,7 +63,6 @@ _DOC = {
 }
 
 _VARS_DOC = load_skeleton_sections("_fb_comment_vars.json")
-_PARAMS_TEMPLATE = _VARS_DOC["params"]
 _CREATE_VARS = (_VARS_DOC["sections"].get("create") or {}).get("variables") or {}
 _DELETE_VARS = (_VARS_DOC["sections"].get("delete") or {}).get("variables") or {}
 
@@ -99,17 +100,9 @@ return JSON.stringify({href:location.href,ids:ids,count:ids.length});
 # window[<key>] under a per-call key so overlapping comments cannot clobber
 # each other's result (same fire-and-poll pattern as _facebook_react). The
 # __FB_* placeholders are substituted before eval; __FB_FID/__FB_TEXT/__FB_CID
-# are JSON strings, __FB_VARS/__FB_PARAMS are JS object literals.
-_CREATE_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-const dtsg=(req("DTSGInitialData")||{}).token;
-const lsd=(req("LSD")||{}).token;
-const site=req("SiteData")||{};
-if(!uid||!dtsg||!lsd)return{error:"no_tokens",hasUid:!!uid,hasDtsg:!!dtsg,hasLsd:!!lsd};
-const vars=__FB_VARS;
+# are JSON strings, __FB_VARS is a JS object literal.
+_CREATE_JS = fb_send_js(
+    """\
 vars.input.feedback_id=__FB_FID;
 vars.input.message.text=__FB_TEXT;
 vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
@@ -117,112 +110,28 @@ vars.input.idempotence_token="client:"+crypto.randomUUID();
 vars.input.session_id=crypto.randomUUID();
 vars.input.downstream_share_session_id=crypto.randomUUID();
 vars.input.downstream_share_session_origin_uri=location.href;
-vars.input.downstream_share_session_start_time=String(Date.now());
-const p=new URLSearchParams();
-const tmpl=__FB_PARAMS;
-for(const k in tmpl)p.set(k,tmpl[k]);
-p.set("av",uid);p.set("__user",uid);p.set("__a","1");
-p.set("__comet_req",site.comet_req||"15");
-p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
-p.set("lsd",lsd);
-p.set("__spin_r",site.__spin_r||"");p.set("__spin_b",site.__spin_b||"");p.set("__spin_t",site.__spin_t||"");
-p.set("__rev",site.client_revision||site.__spin_r||"");p.set("__hsi",site.hsi||"");p.set("__hs",site.hsp||"");
-p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-// Sent sentinel: a retried eval after a transport timeout must not re-fire
-// the mutation — return early; the poll picks up the in-flight result.
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+vars.input.downstream_share_session_start_time=String(Date.now());""",
+    """\
 const node=(((j.data||{}).comment_create||{}).feedback_comment_edge||{}).node||{};
 out.commentId=node.id||null;
 out.feedbackId=(node.feedback||{}).id||null;
 out.bodyText=(((node.body||{}).text)||((node.preferred_body||{}).text))||null;
-out.createdTime=node.created_time||null;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.createdTime=node.created_time||null;""",
+)
 
-_DELETE_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-const dtsg=(req("DTSGInitialData")||{}).token;
-const lsd=(req("LSD")||{}).token;
-const site=req("SiteData")||{};
-if(!uid||!dtsg||!lsd)return{error:"no_tokens",hasUid:!!uid,hasDtsg:!!dtsg,hasLsd:!!lsd};
-const vars=__FB_VARS;
+_DELETE_JS = fb_send_js(
+    """\
 vars.input.comment_id=__FB_CID;
 vars.input.actor_id=uid;
-vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
-const p=new URLSearchParams();
-const tmpl=__FB_PARAMS;
-for(const k in tmpl)p.set(k,tmpl[k]);
-p.set("av",uid);p.set("__user",uid);p.set("__a","1");
-p.set("__comet_req",site.comet_req||"15");
-p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
-p.set("lsd",lsd);
-p.set("__spin_r",site.__spin_r||"");p.set("__spin_b",site.__spin_b||"");p.set("__spin_t",site.__spin_t||"");
-p.set("__rev",site.client_revision||site.__spin_r||"");p.set("__hsi",site.hsi||"");p.set("__hs",site.hsp||"");
-p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-// Sent sentinel: a retried eval after a transport timeout must not re-fire
-// the mutation — return early; the poll picks up the in-flight result.
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);""",
+    """\
 const dd=j.data||{};
 out.dataKeys=Object.keys(dd);
 // Compare padding-insensitively: the response may echo the id with a different
 // '=' padding than the one we sent.
 const stripPad=s=>String(s||"").split("=").join("");
-out.echoesComment=stripPad(JSON.stringify(dd)).indexOf(stripPad(__FB_CID))>=0;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.echoesComment=stripPad(JSON.stringify(dd)).indexOf(stripPad(__FB_CID))>=0;""",
+)
 
 _JS = {"create": _CREATE_JS, "delete": _DELETE_JS}
 _VARS = {"create": _CREATE_VARS, "delete": _DELETE_VARS}
@@ -285,7 +194,6 @@ def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> d
     key = _result_key("__fbCommentResult")
     expr = (
         _JS[kind]
-        .replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
         .replace("__FB_VARS", json.dumps(_VARS[kind], ensure_ascii=False))
         .replace("__FB_FRIENDLY", json.dumps(friendly))
         .replace("__FB_DOC", json.dumps(doc_id))
@@ -361,18 +269,7 @@ def facebook_comment(*, url: str, text: str, timeout: float) -> list:
     _check_url(url)
     if not isinstance(text, str) or not text.strip():
         raise ReachError(BAD_INPUT, "text must be a non-empty string")
-    prepare_facebook()
-
-    deadline = time.monotonic() + timeout
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    target = _fb_target(create=True)
-    if not target:
-        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    tid = target["id"]
-    _wait_ready(tid, left(25))
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
 
     _ensure_post_loaded(tid, url, left(25))
     fid = _resolve_feedback_id(tid, url, left(15))
@@ -411,18 +308,7 @@ def facebook_uncomment(*, url: str, timeout: float) -> list:
         cid_param = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("comment_id", [None])[0]
         if not cid_param:
             raise ReachError(BAD_INPUT, "uncomment needs a comment permalink with ?comment_id= or a raw comment id")
-    prepare_facebook()
-
-    deadline = time.monotonic() + timeout
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    target = _fb_target(create=True)
-    if not target:
-        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    tid = target["id"]
-    _wait_ready(tid, left(25))
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
 
     if raw_id is not None:
         comment_id = raw_id
@@ -432,7 +318,7 @@ def facebook_uncomment(*, url: str, timeout: float) -> list:
         # pattern: poll location.href until the navigation lands).
         href = _eval(tid, "location.href", 8) or ""
         host = (urllib.parse.urlparse(href).hostname or "").lower()
-        if not _check_facebook_host(host):
+        if not _FB_HOST_RE.search(host):
             from agent_reach.runtime import cdp
 
             target_url = "https://www.facebook.com/"
@@ -443,7 +329,7 @@ def facebook_uncomment(*, url: str, timeout: float) -> list:
                 except ReachError:
                     href = ""
                 host = (urllib.parse.urlparse(href).hostname or "").lower()
-                if _check_facebook_host(host):
+                if _FB_HOST_RE.search(host):
                     break
                 time.sleep(0.5)
             _wait_ready(tid, left(20))
@@ -481,7 +367,3 @@ def facebook_uncomment(*, url: str, timeout: float) -> list:
             },
         )
     ]
-
-
-def _check_facebook_host(host: str) -> bool:
-    return bool(re.search(r"(^|\.)(facebook\.com|fb\.com|fb\.watch)$", host, re.IGNORECASE))

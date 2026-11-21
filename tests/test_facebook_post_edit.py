@@ -14,7 +14,6 @@ import re
 import pytest
 
 from agent_reach.channels import _facebook_post_edit as fpe
-from agent_reach.runtime import session_reuse
 from agent_reach.runtime.result import (
     BAD_INPUT,
     NEED_LOGIN,
@@ -22,6 +21,7 @@ from agent_reach.runtime.result import (
     UPSTREAM_BROKEN,
     ReachError,
 )
+from conftest_facebook import FbWriteHarness, locate, locate_json
 
 POST_URL = "https://www.facebook.com/61554949615037/posts/122311668092164987"
 POST_ID = "122311668092164987"
@@ -41,69 +41,41 @@ PRIVACY_SELF = {"allow": [], "base_state": "SELF", "deny": [], "tag_expansion_st
 PRIVACY_FRIENDS_DENY = {"allow": [], "base_state": "FRIENDS", "deny": ["999888777"], "tag_expansion_state": "UNSPECIFIED"}
 
 
+def _stub_post_loaded(monkeypatch, calls):
+    monkeypatch.setattr(fpe, "_ensure_post_loaded", lambda tid, url, timeout: None)
+
+
 @pytest.fixture
 def harness(monkeypatch):
-    """Returns a calls dict; queues are consumed in order.
-
-    - evals records every expr for assertions on the JS sent.
-    - story_results / audience_results / poll_results queue fake eval outputs.
-      "ALWAYS_NONE" keeps returning the empty/None shape; an empty poll queue
-      makes `_eval` return None forever (no result).
-    """
-    calls = {
-        "send": [],
-        "story": [],
-        "audience": [],
-        "poll": [],
-        "evals": [],
-        "uid": UID,
-        "story_uid": UID,
-        "privacy": dict(PRIVACY_SELF),
-        "story_results": [],
-        "audience_results": [],
-        "poll_results": [],
-        "send_results": [{"sent": True}],
-    }
-
-    def fake_eval(target_id, expr, timeout):
-        calls["evals"].append(expr)
-        m = POLL_RE.match(expr)
-        if m:
-            calls["poll"].append(m.group(1))
-            return calls["poll_results"].pop(0) if calls["poll_results"] else None
-        if SEND_EDIT_RE.search(expr) or SEND_DELETE_RE.search(expr):
-            calls["send"].append(expr)
-            return calls["send_results"].pop(0) if calls["send_results"] else {"sent": True}
-        if STORY_LOCATE_RE.search(expr):
-            calls["story"].append(expr)
-            if calls["story_results"]:
-                item = calls["story_results"].pop(0)
-                if item == "ALWAYS_NONE":
-                    calls["story_results"].append(item)
-                    return json.dumps({"href": POST_URL, "ids": [], "uid": None, "count": 0})
-                return item
-            return json.dumps(
-                {"href": POST_URL, "ids": ["STORY-RESOLVED"], "uid": calls["story_uid"], "count": 1}
-            )
-        if PRIVACY_RE.search(expr):
-            calls["audience"].append(expr)
-            if calls["audience_results"]:
-                item = calls["audience_results"].pop(0)
-                if item == "ALWAYS_NONE":
-                    calls["audience_results"].append(item)
-                    return json.dumps({"href": POST_URL, "privacy": None, "count": 0})
-                return item
-            return json.dumps({"href": POST_URL, "privacy": calls["privacy"], "count": 1})
-        if UID_RE.search(expr):
-            return calls["uid"]
-        return True
-
-    monkeypatch.setattr(fpe, "_eval", fake_eval)
-    monkeypatch.setattr(fpe, "_fb_target", lambda create: {"id": "T1", "type": "page", "url": "https://www.facebook.com/"})
-    monkeypatch.setattr(fpe, "_wait_ready", lambda tid, timeout: None)
-    monkeypatch.setattr(fpe, "_ensure_post_loaded", lambda tid, url, timeout: None)
-    monkeypatch.setattr(session_reuse, "prepare", lambda channel, *, force=False: None)
-    return calls
+    """Stubbed browser; queues are consumed in order. An empty poll queue makes
+    `_eval` return None forever (no result)."""
+    return FbWriteHarness(
+        fpe,
+        poll_re=POLL_RE,
+        send_re=f"{SEND_EDIT_RE.pattern}|{SEND_DELETE_RE.pattern}",
+        locates=(
+            locate(
+                STORY_LOCATE_RE,
+                label="story",
+                queue="story_results",
+                empty=locate_json(lambda c: {"href": POST_URL, "ids": [], "uid": None, "count": 0}),
+                default=locate_json(
+                    lambda c: {"href": POST_URL, "ids": ["STORY-RESOLVED"], "uid": c["story_uid"], "count": 1}
+                ),
+            ),
+            locate(
+                PRIVACY_RE,
+                label="audience",
+                queue="audience_results",
+                empty=locate_json(lambda c: {"href": POST_URL, "privacy": None, "count": 0}),
+                default=locate_json(lambda c: {"href": POST_URL, "privacy": c["privacy"], "count": 1}),
+            ),
+            locate(UID_RE, label="uid", queue=None, default=lambda c: c["uid"], record=False),
+        ),
+        strict=False,
+        state={"uid": UID, "story_uid": UID, "privacy": dict(PRIVACY_SELF)},
+        extra_patches=_stub_post_loaded,
+    ).patch(monkeypatch)
 
 
 def ok_edit(**over):
@@ -608,7 +580,6 @@ def test_rendered_send_exprs_are_balanced_and_substituted():
     for kind in ("edit", "delete"):
         expr = (
             fpe._JS[kind]
-            .replace("__FB_PARAMS", json.dumps(fpe._PARAMS[kind]))
             .replace("__FB_VARS", json.dumps(fpe._VARS[kind], ensure_ascii=False))
             .replace("__FB_FRIENDLY", json.dumps(fpe._DOC[kind][0]))
             .replace("__FB_DOC", json.dumps(fpe._DOC[kind][1]))

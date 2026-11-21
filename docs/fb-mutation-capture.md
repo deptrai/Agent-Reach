@@ -1,10 +1,16 @@
 # Facebook mutation capture (write actions)
 
-`facebook post` and future write actions replay real `/api/graphql` mutations
-with tokens harvested live from the page (`fb_dtsg`, `lsd`, `jazoest`,
-`__spin_*`). The non-secret part of the request — the `variables` skeleton
-including `__relay_internal__pv__*` provider flags — is captured once and
-committed as `agent_reach/channels/_fb_<name>_vars.json`.
+`facebook post` and the other write actions replay real `/api/graphql`
+mutations with the **live transport envelope** harvested from the page via
+`window.require("getAsyncParams")("POST")` — it carries `fb_dtsg`, `lsd`,
+`jazoest`, `__spin_*`, `__dyn`, `__csr`, `__hs*` and friends, always
+consistent with the current FB build. (An older design replayed a captured
+`params` template; it broke on every deploy and was removed — see the
+`getAsyncParams` comment in `agent_reach/channels/_facebook_share.py`.)
+
+What still has to be captured once and committed is the `variables`
+skeleton — including the full set of `__relay_internal__pv__*` provider
+flags — as `agent_reach/channels/_fb_<name>_vars.json`.
 
 ## Capturing a new mutation
 
@@ -55,3 +61,31 @@ GraphQL error 1675012 / "Your Request Couldn't be Processed". Fix:
 - The dedicated (headless) profile can't be clicked by hand; use a headed
   profile for capture. The skeleton itself is account-agnostic after
   sanitization.
+- **Never unescape `&quot;` across `innerHTML` to find embedded JSON** — user
+  text contains `&quot;` too and unescaping it creates fake `"feedback_id":`
+  matches (wrong-target writes). Match both raw and escaped forms in place:
+  `/"feedback_id":"([^"]+)"|&quot;feedback_id&quot;:&quot;([^&]+)&quot;/g`
+  (see `_LOCATE_JS` in `agent_reach/channels/_facebook_react.py`).
+- **Verify results by parsed fields, not body substring** — Facebook JSON-
+  escapes response text as `\uXXXX`, so `body.indexOf(postedText)` false-
+  negatives on Vietnamese/emoji and makes a successful write look like a
+  failure (duplicate on retry). Parse `data.*` fields or compare the
+  unicode-escaped form (see `textEchoed` in `_facebook_post_edit.py`).
+
+## Live e2e verification
+
+When you verify a write action against a real account:
+
+- The dedicated browser must hold a **live session** — check
+  `agent-reach facebook profile <someone>` first. If actions start failing
+  with `NEED_LOGIN` or empty page results, the session expired (FB rotates
+  `c_user`/`xs`, sometimes invalidates them after checkpoint). Re-login via
+  `agent-reach login facebook`, or inject fresh cookies from a logged-in
+  browser into the dedicated profile via CDP `Network.setCookie`.
+- Prefer `only_me` audience for test posts — and clean up test posts from
+  the timeline afterwards (they accumulate).
+- After an `UPSTREAM_BROKEN`, opencli may pause the channel for ~2 minutes
+  (circuit breaker). Wait and retry — don't re-fire mutations blindly,
+  some are idempotent but posts/comments are not (duplicates).
+- Verify on the page itself, not just the action's exit code: permalink
+  loads, reaction count flips, comment appears/disappears.

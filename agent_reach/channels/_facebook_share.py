@@ -42,15 +42,16 @@ from ._facebook_write import (
     _result_key,
     _wait_ready,
     classify_result,
+    fb_send_js,
+    fb_write_target,
     load_skeleton,
-    prepare_facebook,
     send_mutation,
 )
 
 _DOC_ID = "29304741702489334"
 _FRIENDLY = "ComposerStoryCreateMutation"
 
-_PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_fb_share_vars.json")
+_VARS_SKELETON = load_skeleton("_fb_share_vars.json")[1]
 
 _AUDIENCE = {"only_me": "SELF", "friends": "FRIENDS", "public": "EVERYONE"}
 
@@ -70,20 +71,8 @@ return JSON.stringify({href:location.href,pid:ids[0]||null,count:ids.length});
 # the result lands in window[<key>] under a per-call key so overlapping
 # shares cannot clobber each other's result (same fire-and-poll pattern as
 # _facebook_write._POST_JS). __FB_* are substituted before eval.
-_SEND_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-// getAsyncParams returns the whole live request envelope — __csr/__dyn/
-// __hsdp/__sjsp checksums, __hsi, __s, __req, fb_dtsg/lsd/jazoest — all
-// consistent with the CURRENT page build and session. Hand-assembling a
-// stale template makes the share mutation fail with a field_exception.
-const gp=req("getAsyncParams");
-if(!uid||!gp)return{error:"no_tokens",hasUid:!!uid};
-const base=gp("POST")||{};
-if(!base.fb_dtsg||!base.lsd)return{error:"no_tokens",hasUid:true};
-const vars=__FB_VARS;
+_SEND_JS = fb_send_js(
+    """\
 const link=(vars.input.attachments[0]||{}).link;
 // Post ids exceed 2^53 — Number() would round them and FB reports
 // "can't load the post". Concatenate the digits verbatim instead.
@@ -94,47 +83,15 @@ const sid=crypto.randomUUID();
 vars.input.idempotence_token=sid+"_FEED";
 vars.input.logging.composer_session_id=sid;
 vars.input.actor_id=uid;
-vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
-const p=new URLSearchParams();
-for(const k in base)p.set(k,base[k]);
-p.set("av",uid);
-p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-// Sent sentinel: a retried eval after a transport timeout must not re-fire
-// the mutation — return early; the poll picks up the in-flight result.
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);""",
+    """\
 const sc=(j.data||{}).story_create||{};
 const story=sc.story||{};
 out.storyUrl=story.url||null;
 out.storyId=story.legacy_story_hideable_id||story.id||null;
 out.postId=sc.post_id||null;
-out.newPostId=sc.new_post_id||null;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.newPostId=sc.new_post_id||null;""",
+)
 
 
 def _resolve_post_id(target_id: str, url: str, timeout: float) -> str:
@@ -227,18 +184,7 @@ def facebook_share(*, url: str, text: str = "", audience: str = "only_me", timeo
     if audience not in _AUDIENCE:
         raise ReachError(BAD_INPUT, "audience must be one of: only_me, friends, public")
     _check_url(url)
-    prepare_facebook()
-
-    deadline = time.monotonic() + timeout
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    target = _fb_target(create=True)
-    if not target:
-        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    tid = target["id"]
-    _wait_ready(tid, left(25))
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
 
     _ensure_post_loaded(tid, url, left(25))
     post_id = _resolve_post_id(tid, url, left(15))

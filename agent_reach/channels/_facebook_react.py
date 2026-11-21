@@ -39,8 +39,9 @@ from ._facebook_write import (
     _result_key,
     _wait_ready,
     classify_result,
+    fb_send_js,
+    fb_write_target,
     load_skeleton,
-    prepare_facebook,
     send_mutation,
 )
 
@@ -58,7 +59,7 @@ _REACTION_IDS = {
     "angry": "444813342392137",
 }
 
-_PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_fb_react_vars.json")
+_VARS_SKELETON = load_skeleton("_fb_react_vars.json")[1]
 
 _FB_HOST_RE = re.compile(r"(^|\.)(facebook\.com|fb\.com|fb\.watch)$", re.IGNORECASE)
 
@@ -107,17 +108,9 @@ return JSON.stringify({href:location.href,fid:fid,cidBound:cidBound,count:ids.le
 # the result lands in window[<key>] under a per-call key so overlapping
 # reactions cannot clobber each other's result (same fire-and-poll pattern as
 # _facebook_write._POST_JS). __FB_* are substituted before eval; __FB_FID and
-# __FB_RID are simple JSON strings, __FB_VARS/__FB_PARAMS are JSON literals.
-_SEND_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-const dtsg=(req("DTSGInitialData")||{}).token;
-const lsd=(req("LSD")||{}).token;
-const site=req("SiteData")||{};
-if(!uid||!dtsg||!lsd)return{error:"no_tokens",hasUid:!!uid,hasDtsg:!!dtsg,hasLsd:!!lsd};
-const vars=__FB_VARS;
+# __FB_RID are simple JSON strings, __FB_VARS is a JSON literal.
+_SEND_JS = fb_send_js(
+    """\
 vars.input.feedback_id=__FB_FID;
 vars.input.feedback_reaction_id=__FB_RID;
 vars.input.actor_id=uid;
@@ -125,51 +118,13 @@ vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
 vars.input.session_id=crypto.randomUUID();
 vars.input.downstream_share_session_id=crypto.randomUUID();
 vars.input.downstream_share_session_origin_uri=location.href;
-vars.input.downstream_share_session_start_time=String(Date.now());
-const p=new URLSearchParams();
-const tmpl=__FB_PARAMS;
-for(const k in tmpl)p.set(k,tmpl[k]);
-p.set("av",uid);p.set("__user",uid);p.set("__a","1");
-p.set("__comet_req",site.comet_req||"15");
-p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
-p.set("lsd",lsd);
-p.set("__spin_r",site.__spin_r||"");p.set("__spin_b",site.__spin_b||"");p.set("__spin_t",site.__spin_t||"");
-p.set("__rev",site.client_revision||site.__spin_r||"");p.set("__hsi",site.hsi||"");p.set("__hs",site.hsp||"");
-p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-// Sent sentinel: a retried eval after a transport timeout must not re-fire
-// the mutation — return early; the poll picks up the in-flight result.
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+vars.input.downstream_share_session_start_time=String(Date.now());""",
+    """\
 const fr=(j.data||{}).feedback_react||(j.data||{}).feedback_unreact||{};
 const fb=fr.feedback||{};
 out.reactionId=(fb.viewer_feedback_reaction_info||{}).id||null;
-out.reactionCount=(fb.reaction_count||{}).count;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.reactionCount=(fb.reaction_count||{}).count;""",
+)
 
 
 def _check_url(url: str) -> urllib.parse.ParseResult:
@@ -283,8 +238,7 @@ def _send_reaction(target_id: str, *, fid: str, rid: str, deadline: float) -> di
     """Fire-and-poll the reaction mutation; returns the parsed page result."""
     key = _result_key("__fbReactResult")
     expr = (
-        _SEND_JS.replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
-        .replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
+        _SEND_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
         .replace("__FB_FID", json.dumps(fid))
         .replace("__FB_RID", json.dumps(rid))
         .replace("__FB_FRIENDLY", json.dumps(_FRIENDLY))
@@ -341,18 +295,7 @@ def _reaction_result(out: dict, *, url: str, reaction: str | None, rid: str) -> 
 def _react_or_unreact(*, url: str, reaction: str | None, timeout: float) -> list:
     _check_url(url)
     rid = "0" if reaction is None else _REACTION_IDS[reaction]
-    prepare_facebook()
-
-    deadline = time.monotonic() + timeout
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    target = _fb_target(create=True)
-    if not target:
-        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    tid = target["id"]
-    _wait_ready(tid, left(25))
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
 
     _ensure_post_loaded(tid, url, left(25))
     fid = _resolve_feedback_id(tid, url, left(15))

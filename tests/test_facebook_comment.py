@@ -13,7 +13,6 @@ import re
 import pytest
 
 from agent_reach.channels import _facebook_comment as fc
-from agent_reach.runtime import session_reuse
 from agent_reach.runtime.result import (
     BAD_INPUT,
     NEED_LOGIN,
@@ -21,6 +20,7 @@ from agent_reach.runtime.result import (
     UPSTREAM_BROKEN,
     ReachError,
 )
+from conftest_facebook import FbWriteHarness, locate, locate_json
 
 POST_URL = "https://www.facebook.com/61554949615037/posts/122311668092164987"
 COMMENT_URL = POST_URL + "?comment_id=56789"
@@ -35,64 +35,39 @@ LOCATE_CID_RE = re.compile(re.escape("Y29tbWVud[A-Za-z0-9+/_=-]{6,200}"))
 LOCATE_FID_RE = re.compile(r'"feedback_id":"\(\[\^"\]\+\)"')  # post feedback_id locate JS (literal source text)
 
 
-@pytest.fixture
-def harness(monkeypatch):
-    """Returns a calls dict; queues are consumed in order.
-
-    - evals records every expr for assertions on the JS sent.
-    - locate_cid_results / send_results / poll_results queue fake eval outputs;
-      an empty poll queue makes `_eval` return None forever (no result).
-    """
-    calls = {
-        "send": [],
-        "locate_cid": [],
-        "poll": [],
-        "evals": [],
-        "navigations": [],
-        "href": POST_URL,  # what location.href reports inside the tab
-    }
-    calls["locate_cid_results"] = []
-    calls["send_results"] = [{"sent": True}]
-    calls["poll_results"] = []
-
-    def fake_eval(target_id, expr, timeout):
-        calls["evals"].append(expr)
-        m = POLL_RE.match(expr)
-        if m:
-            calls["poll"].append(m.group(1))
-            return calls["poll_results"].pop(0) if calls["poll_results"] else None
-        if SEND_CREATE_RE.search(expr) or SEND_DELETE_RE.search(expr):
-            calls["send"].append(expr)
-            return calls["send_results"].pop(0) if calls["send_results"] else {"sent": True}
-        if LOCATE_CID_RE.search(expr):
-            calls["locate_cid"].append(expr)
-            if calls["locate_cid_results"]:
-                item = calls["locate_cid_results"].pop(0)
-                if item == "ALWAYS_NONE":
-                    calls["locate_cid_results"].append(item)
-                    return json.dumps({"href": POST_URL, "ids": [], "count": 0})
-                return item
-            return json.dumps({"href": POST_URL, "ids": ["CID-RESOLVED"], "count": 1})
-        if LOCATE_FID_RE.search(expr):
-            return json.dumps({"href": POST_URL, "fid": "FID-POST-1", "count": 1})
-        if expr == "location.href":
-            navs = calls["navigations"]
-            if navs and navs[-1][0] == "Page.navigate":
-                return (navs[-1][1] or {}).get("url") or POST_URL
-            return calls["href"]
-        # focus_expr / scrollIntoView probe and anything else: benign truthy.
-        return True
-
-    monkeypatch.setattr(fc, "_eval", fake_eval)
-    monkeypatch.setattr(fc, "_fb_target", lambda create: {"id": "T1", "type": "page", "url": "https://www.facebook.com/"})
-    monkeypatch.setattr(fc, "_wait_ready", lambda tid, timeout: None)
+def _stub_resolvers(monkeypatch, calls):
     monkeypatch.setattr(fc, "_ensure_post_loaded", lambda tid, url, timeout: None)
     monkeypatch.setattr(fc, "_resolve_feedback_id", lambda tid, url, timeout: "FID-POST-1")
-    monkeypatch.setattr(session_reuse, "prepare", lambda channel, *, force=False: None)
-    from agent_reach.runtime import cdp
 
-    monkeypatch.setattr(cdp, "call", lambda method, params=None, **kw: calls["navigations"].append((method, params)) or {})
-    return calls
+
+@pytest.fixture
+def harness(monkeypatch):
+    """Stubbed browser; queues are consumed in order. An empty poll queue makes
+    `_eval` return None forever (no result)."""
+    return FbWriteHarness(
+        fc,
+        poll_re=POLL_RE,
+        send_re=f"{SEND_CREATE_RE.pattern}|{SEND_DELETE_RE.pattern}",
+        locates=(
+            locate(
+                LOCATE_CID_RE,
+                label="locate_cid",
+                queue="locate_cid_results",
+                empty=locate_json(lambda c: {"href": POST_URL, "ids": [], "count": 0}),
+                default=locate_json(lambda c: {"href": POST_URL, "ids": ["CID-RESOLVED"], "count": 1}),
+            ),
+            locate(
+                LOCATE_FID_RE,
+                label="locate_fid",
+                default=locate_json(lambda c: {"href": POST_URL, "fid": "FID-POST-1", "count": 1}),
+                record=False,
+            ),
+        ),
+        strict=False,
+        href_default=POST_URL,
+        fallback_href=POST_URL,
+        extra_patches=_stub_resolvers,
+    ).patch(monkeypatch)
 
 
 def ok_create(**over):
@@ -493,7 +468,6 @@ def test_rendered_js_exprs_are_balanced():
     for kind in ("create", "delete"):
         expr = (
             fc._JS[kind]
-            .replace("__FB_PARAMS", json.dumps(fc._PARAMS_TEMPLATE))
             .replace("__FB_VARS", json.dumps(fc._VARS[kind], ensure_ascii=False))
             .replace("__FB_FRIENDLY", json.dumps(fc._DOC[kind][0]))
             .replace("__FB_DOC", json.dumps(fc._DOC[kind][1]))

@@ -12,7 +12,6 @@ import re
 import pytest
 
 from agent_reach.channels import _facebook_react as fr
-from agent_reach.runtime import session_reuse
 from agent_reach.runtime.result import (
     BAD_INPUT,
     NEED_LOGIN,
@@ -20,70 +19,46 @@ from agent_reach.runtime.result import (
     UPSTREAM_BROKEN,
     ReachError,
 )
+from conftest_facebook import FbWriteHarness, locate, locate_json
 
 POST_URL = "https://www.facebook.com/61554949615037/posts/122311659992164987"
 SEND_RE = re.compile(r"CometUFIFeedbackReactMutation")
 POLL_RE = re.compile(r'^window\["(__fbReactResult_[0-9a-f]{32})"\]\|\|null$')
 LOCATE_RE = re.compile(r'"feedback_id":"\(\[\^"\]\+\)"')
+RID_RE = re.compile(r'feedback_reaction_id="(\d+)"')
+
+
+def _echo_sent_reaction(res, calls):
+    """``@sent`` = echo the reaction id actually sent, like FB does."""
+    if isinstance(res, dict) and res.get("reactionId") == "@sent":
+        rid = calls["rid"]
+        return dict(res, reactionId=None if rid == "0" else rid)
+    return res
 
 
 @pytest.fixture
 def harness(monkeypatch):
-    """Returns a calls dict. Queues are consumed in order.
-
-    - evals records every (expr) for assertions on the JS sent.
-    - locate_results / send_results / poll_results queue fake eval outputs;
-      an empty poll queue makes `_eval` return None forever (never a result).
-    """
-    calls = {"send": [], "locate": [], "poll": [], "evals": [], "navigations": [], "rid": None}
-    calls["locate_results"] = []
-    calls["send_results"] = [{"sent": True}]
-    calls["poll_results"] = []
-
-    def fake_eval(target_id, expr, timeout):
-        calls["evals"].append(expr)
-        m = POLL_RE.match(expr)
-        if m:
-            calls["poll"].append(m.group(1))
-            if not calls["poll_results"]:
-                return None
-            res = calls["poll_results"].pop(0)
-            # "@sent" = echo the reaction id actually sent, like FB does.
-            if isinstance(res, dict) and res.get("reactionId") == "@sent":
-                rid = calls["rid"]
-                res = dict(res, reactionId=None if rid == "0" else rid)
-            return res
-        if SEND_RE.search(expr):
-            calls["send"].append(expr)
-            m2 = re.search(r'feedback_reaction_id="(\d+)"', expr)
-            if m2:
-                calls["rid"] = m2.group(1)
-            return calls["send_results"].pop(0) if calls["send_results"] else {"sent": True}
-        if LOCATE_RE.search(expr):
-            calls["locate"].append(expr)
-            if calls["locate_results"]:
-                item = calls["locate_results"].pop(0)
-                if item == "ALWAYS_NONE":
-                    calls["locate_results"].append(item)  # keep returning no-fid
-                    return json.dumps({"href": POST_URL, "fid": None, "count": 0})
-                return item
-            return json.dumps({"href": POST_URL, "fid": "FID-POST-1", "count": 1})
-        if expr == "location.href":
-            # After Page.navigate the tab shows the navigated URL.
-            navs = calls["navigations"]
-            if navs and navs[-1][0] == "Page.navigate":
-                return (navs[-1][1] or {}).get("url") or POST_URL
-            return POST_URL
-        raise AssertionError(f"unexpected eval expression: {expr[:160]}")
-
-    monkeypatch.setattr(fr, "_eval", fake_eval)
-    monkeypatch.setattr(fr, "_fb_target", lambda create: {"id": "T1", "type": "page", "url": "https://www.facebook.com/"})
-    monkeypatch.setattr(fr, "_wait_ready", lambda tid, timeout: None)
-    monkeypatch.setattr(session_reuse, "prepare", lambda channel, *, force=False: None)
-    from agent_reach.runtime import cdp
-
-    monkeypatch.setattr(cdp, "call", lambda method, params=None, **kw: calls["navigations"].append((method, params)) or {})
-    return calls
+    """Stubbed browser; queues are consumed in order. An empty poll queue makes
+    `_eval` return None forever (never a result)."""
+    return FbWriteHarness(
+        fr,
+        poll_re=POLL_RE,
+        send_re=SEND_RE,
+        rid_re=RID_RE,
+        poll_transform=_echo_sent_reaction,
+        locates=(
+            locate(
+                LOCATE_RE,
+                label="locate",
+                queue="locate_results",
+                empty=locate_json(lambda c: {"href": POST_URL, "fid": None, "count": 0}),
+                default=locate_json(lambda c: {"href": POST_URL, "fid": "FID-POST-1", "count": 1}),
+            ),
+        ),
+        href_default=POST_URL,
+        fallback_href=POST_URL,
+        state={"rid": None},
+    ).patch(monkeypatch)
 
 
 def ok_result(**over):

@@ -101,7 +101,7 @@ class FacebookChannel(OpenCLISiteChannel):
         ),
         Action(
             "share",
-            "Share a Facebook post to your timeline",
+            "Share a Facebook post to your timeline (others' posts — FB rejects resharing your own)",
             (
                 Param("url", "facebook.com post URL"),
                 Param("text", "optional caption for the share", required=False, default=""),

@@ -16,7 +16,7 @@ reports `menuCount: 0` or `itemFound: false`, adjust the selectors in
 
 Sanitized skeletons (params + variables + doc_id, actor/uid -> "0", uuids ->
 zero-uuid, epochs -> 0) are merged into
-`agent_reach/channels/_fb_post_vars.json` under "edit" / "delete" (or written
+`agent_reach/channels/_fb_post_edit_vars.json` under "edit" / "delete" (or written
 standalone with --out).
 """
 import json
@@ -34,7 +34,7 @@ from agent_reach.channels._facebook_write import _eval, _fb_target, _wait_ready 
 from capture_fb_mutation import parse_body, sanitize  # noqa: E402
 
 POST_URL = "https://www.facebook.com/61554949615037/posts/122311668092164987"
-VARS_PATH = Path(__file__).with_name("..") / "agent_reach" / "channels" / "_fb_post_vars.json"
+VARS_PATH = Path(__file__).with_name("..") / "agent_reach" / "channels" / "_fb_post_edit_vars.json"
 
 # Transport keys safe to persist — everything else in params is a live
 # session token (fb_dtsg/lsd/jazoest/av/__user/...) that the send JS

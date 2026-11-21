@@ -72,7 +72,7 @@ class TestSanitize:
     def test_real_skeleton_roundtrip(self):
         skeleton_path = (
             Path(__file__).resolve().parent.parent
-            / "agent_reach" / "channels" / "_facebook_vars.json"
+            / "agent_reach" / "channels" / "_fb_post_create_vars.json"
         )
         if not skeleton_path.exists():
             pytest.skip("no skeleton on disk")

@@ -6,7 +6,7 @@ Reads go through `opencli facebook`; writes replay Facebook's own GraphQL
 dedicated browser. Token params (fb_dtsg, lsd, jazoest, spin tokens, __user)
 are read live from `window.require`; the remaining transport params
 (__dyn, __csr, __hsdp, __crn, __req, dpr...) are replayed from a captured
-template in `_facebook_vars.json` — they ARE required on some builds: without
+`getAsyncParams("POST")` envelope — they ARE required on some builds: without
 them FB answers "The GraphQL document with ID … was not found" even when
 doc_id is still valid. The whole file ({params, variables}, including the
 __relay_internal__pv__* provider flags) is captured once from a real composer
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.parse
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -66,6 +67,115 @@ def prepare_facebook() -> None:
 def _result_key(prefix: str) -> str:
     """Per-call window key — isolates concurrent mutation results."""
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+_FB_SEND_TEMPLATE = r"""
+(()=>{try{
+const req=window.require;
+if(!req)return{error:"no_require"};
+const uid=(req("CurrentUserInitialData")||{}).USER_ID;
+// getAsyncParams returns the whole live request envelope — transport
+// checksums (__csr/__dyn/__hsdp/__sjsp), __hsi, __s, __req, fb_dtsg/lsd/
+// jazoest — consistent with the CURRENT page build and session. A
+// hand-assembled template goes stale on every FB deploy.
+const gp=req("getAsyncParams");
+if(!uid||!gp)return{error:"no_tokens",hasUid:!!uid};
+const base=gp("POST")||{};
+if(!base.fb_dtsg||!base.lsd)return{error:"no_tokens",hasUid:true};
+const vars=__FB_VARS;
+__FB_VARS_MUT
+const p=new URLSearchParams();
+for(const k in base)p.set(k,base[k]);
+p.set("av",uid);
+p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
+p.set("fb_api_caller_class","RelayModern");
+p.set("doc_id",__FB_DOC);
+p.set("server_timestamps","true");
+p.set("variables",JSON.stringify(vars));
+const KEY=__FB_KEY;
+// Sent sentinel: if a previous eval of this expression timed out at the
+// transport layer but actually executed, the retry must not fire the
+// mutation a second time — it returns early and the poll picks up the
+// in-flight result instead.
+if(window[KEY+"_sent"])return{sent:true,dup:true};
+window[KEY+"_sent"]=true;
+window[KEY]=null;
+fetch("/api/graphql/",{method:"POST",credentials:"include",
+headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
+body:p.toString()}).then(r=>r.text().then(t=>{
+const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
+const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
+let j=null;
+try{j=JSON.parse(clean)}catch(e){
+for(const line of clean.split("\n")){
+if(!line.trim())continue;
+try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
+}
+}
+if(j){
+out.parsed=true;
+out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+__FB_RESULT_MUT
+}else{out.parsed=false}
+window[KEY]=out;
+})).catch(e=>{window[KEY]={error:String(e)}});
+return{sent:true}}catch(e){return{error:String(e)}}})()
+"""
+
+
+def fb_send_js(vars_mut: str, result_mut: str, *, body_slice: int = 2000) -> str:
+    """Compose a page-side GraphQL send expression from the shared template.
+
+    ``vars_mut`` is JS executed after ``const vars=__FB_VARS;`` — the
+    per-verb mutations (message text, feedback_id, attachments, audience
+    ...). ``result_mut`` is JS run inside ``if(j){...}`` that extracts
+    response fields into ``out`` — per-verb (storyUrl, commentId,
+    reactionId, deletedStoryId, ...). Everything else — token/envelope
+    handling, transport params, the sent sentinel, fetch, for(;;); strip,
+    NDJSON fallback, window-key store — is shared here.
+
+    ``body_slice`` overrides the ``out.body`` preview length — post_edit
+    keeps 4000 because its payload is huge and the echo check reads the
+    full body ``t`` (the slice only feeds the unparseable-response head).
+    """
+    expr = (_FB_SEND_TEMPLATE
+            .replace("__FB_VARS_MUT", vars_mut)
+            .replace("__FB_RESULT_MUT", result_mut))
+    if body_slice != 2000:
+        expr = expr.replace("body:t.slice(0,2000)", f"body:t.slice(0,{body_slice})")
+    return expr
+
+
+def fb_write_target(
+    timeout: float,
+    *,
+    target_fn: Callable | None = None,
+    wait_fn: Callable | None = None,
+) -> tuple[float, Callable[[float], float], str]:
+    """Shared write-verb scaffold: warm the facebook session, arm one
+    deadline, open a facebook.com tab and wait for page readiness.
+
+    Returns ``(deadline, left, target_id)`` where ``left(cap)`` is the
+    shared deadline helper — pass ``deadline`` to ``send_mutation`` and
+    ``left`` to ``_eval``/``_ensure_post_loaded``/resolvers.
+    ``target_fn``/``wait_fn`` default to this module's
+    ``_fb_target``/``_wait_ready`` — sibling callers pass their own so
+    tests can stub per-module (same contract as ``send_mutation.eval_fn``)."""
+    prepare_facebook()
+    if target_fn is None:
+        target_fn = _fb_target
+    if wait_fn is None:
+        wait_fn = _wait_ready
+    deadline = time.monotonic() + timeout
+
+    def left(cap: float) -> float:
+        return max(1.0, min(deadline - time.monotonic(), cap))
+
+    target = target_fn(create=True)
+    if not target:
+        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
+    wait_fn(target["id"], left(25))
+    return deadline, left, target["id"]
 
 
 def send_mutation(
@@ -170,7 +280,7 @@ def classify_result(out: dict, *, label: str, name: str, confirmed: Callable[[],
 # Skeleton captured from a real composer post: {"params": form params replayed
 # verbatim, "variables": Relay variables with placeholders overwritten at send
 # time}. A flat (params-less) file still loads as variables-only.
-_PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_facebook_vars.json")
+_VARS_SKELETON = load_skeleton("_fb_post_create_vars.json")[1]
 
 # Build params from window.require + fire the post WITHOUT awaiting it — the
 # result lands in window[<key>] under a per-call key so overlapping posts
@@ -179,70 +289,38 @@ _PARAMS_TEMPLATE, _VARS_SKELETON = load_skeleton("_facebook_vars.json")
 # duplicate it. __FB_VARS / __FB_AUD / __FB_DOC / __FB_KEY / __FB_TEXT are
 # substituted before eval — __FB_TEXT always LAST, because the user's text
 # could itself contain any of the other sentinel strings.
-_POST_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-const dtsg=(req("DTSGInitialData")||{}).token;
-const lsd=(req("LSD")||{}).token;
-const site=req("SiteData")||{};
-if(!uid||!dtsg||!lsd)return{error:"no_tokens",hasUid:!!uid,hasDtsg:!!dtsg,hasLsd:!!lsd};
-const vars=__FB_VARS;
+_POST_JS = (
+    fb_send_js(
+        """\
 vars.input.message.text=__FB_TEXT;
 vars.input.audience={privacy:{allow:[],base_state:__FB_AUD,deny:[],tag_expansion_state:"UNSPECIFIED"}};
 vars.input.idempotence_token=crypto.randomUUID()+"_FEED";
 vars.input.logging={...(vars.input.logging||{}),composer_session_id:crypto.randomUUID()};
 vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
-vars.input.actor_id=uid;
-const p=new URLSearchParams();
-const tmpl=__FB_PARAMS;
-for(const k in tmpl)p.set(k,tmpl[k]);
-p.set("av",uid);p.set("__user",uid);p.set("__a","1");
-p.set("__comet_req",site.comet_req||"15");
-p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
-p.set("lsd",lsd);
-p.set("__spin_r",site.__spin_r||"");p.set("__spin_b",site.__spin_b||"");p.set("__spin_t",site.__spin_t||"");
-p.set("__rev",site.client_revision||site.__spin_r||"");p.set("__hsi",site.hsi||"");p.set("__hs",site.hsp||"");
-p.set("fb_api_req_friendly_name","ComposerStoryCreateMutation");
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-// Sent sentinel: if a previous eval of this expression timed out at the
-// transport layer but actually executed, the retry must not fire the
-// mutation a second time — it returns early and the poll picks up the
-// in-flight result instead.
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":"ComposerStoryCreateMutation"},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,2000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+vars.input.actor_id=uid;""",
+        """\
 const sc=(j.data||{}).story_create||{};
 const st=sc.story||{};
 out.storyUrl=st.url||null;
 out.storyId=st.legacy_story_hideable_id||st.id||null;
 out.newPostId=sc.new_post_id||null;
-out.postId=sc.post_id||null;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.postId=sc.post_id||null;""",
+    )
+    .replace("__FB_FRIENDLY", json.dumps("ComposerStoryCreateMutation"))
+)
+
+
+_FB_HOST_SUFFIXES = ("facebook.com", "fb.com", "fb.watch")
+
+
+def _is_facebook_url(url: str) -> bool:
+    """True only when the URL's hostname is a real Facebook domain —
+    substring matching would accept ``notfacebook.com.evil.example``."""
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except (ValueError, AttributeError):
+        return False
+    return any(host == s or host.endswith("." + s) for s in _FB_HOST_SUFFIXES)
 
 
 def _fb_target(create: bool):
@@ -251,7 +329,7 @@ def _fb_target(create: bool):
 
     targets = cdp._json("/json/list") or []
     for t in targets:
-        if t.get("type") == "page" and "facebook.com" in t.get("url", ""):
+        if t.get("type") == "page" and _is_facebook_url(t.get("url", "")):
             return t
     if not create:
         return None
@@ -310,29 +388,19 @@ def _error_message(errors: list) -> str:
 
 def facebook_post(*, text: str, audience: str, timeout: float) -> list:
     """Post `text` as a status update in the dedicated browser's FB session."""
-    prepare_facebook()
     # One shared deadline for every phase — a fresh budget per phase could
     # overrun the dispatch timeout and strand the in-flight post.
-    deadline = time.monotonic() + timeout
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    target = _fb_target(create=True)
-    if not target:
-        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    _wait_ready(target["id"], left(25))
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
 
     key = _result_key("__fbPostResult")
     expr = (
-        _POST_JS.replace("__FB_PARAMS", json.dumps(_PARAMS_TEMPLATE))
-        .replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
+        _POST_JS.replace("__FB_VARS", json.dumps(_VARS_SKELETON, ensure_ascii=False))
         .replace("__FB_AUD", json.dumps(_AUDIENCE[audience]))
         .replace("__FB_DOC", json.dumps(_DOC_ID))
         .replace("__FB_KEY", json.dumps(key))
         .replace("__FB_TEXT", json.dumps(text, ensure_ascii=False))
     )
-    out = send_mutation(target["id"], expr, deadline=deadline, key=key, label="Post", dup_hint=True)
+    out = send_mutation(tid, expr, deadline=deadline, key=key, label="Post", dup_hint=True)
     classify_result(
         out,
         label="post",

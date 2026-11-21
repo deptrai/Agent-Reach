@@ -11,8 +11,8 @@ import re
 import pytest
 
 from agent_reach.channels import _facebook_write as fw
-from agent_reach.runtime import session_reuse
 from agent_reach.runtime.result import NEED_LOGIN, RATE_LIMITED, UPSTREAM_BROKEN, ReachError
+from conftest_facebook import FbWriteHarness
 
 SEND_RE = re.compile(r"ComposerStoryCreateMutation")
 POLL_RE = re.compile(r'^window\["(__fbPostResult_[0-9a-f]{32})"\]\|\|null$')
@@ -20,31 +20,9 @@ POLL_RE = re.compile(r'^window\["(__fbPostResult_[0-9a-f]{32})"\]\|\|null$')
 
 @pytest.fixture
 def harness(monkeypatch):
-    """Returns (send_queue, poll_queue, evals). Queues are consumed in order.
-
-    - evals records every (target_id, expr) for assertions on the JS sent.
-    - An empty poll queue makes `_eval` return None forever (never a result).
-    """
-    calls = {"send": [], "poll": [], "evals": []}
-
-    def fake_eval(target_id, expr, timeout):
-        calls["evals"].append(expr)
-        m = POLL_RE.match(expr)
-        if m:
-            calls["poll"].append(m.group(1))
-            return calls["poll_results"].pop(0) if calls["poll_results"] else None
-        assert SEND_RE.search(expr), f"unexpected eval expression: {expr[:120]}"
-        calls["send"].append(expr)
-        # Default: every send succeeds; tests queue deviations explicitly.
-        return calls["send_results"].pop(0) if calls["send_results"] else {"sent": True}
-
-    monkeypatch.setattr(fw, "_eval", fake_eval)
-    monkeypatch.setattr(fw, "_fb_target", lambda create: {"id": "T1", "type": "page", "url": "https://www.facebook.com/"})
-    monkeypatch.setattr(fw, "_wait_ready", lambda tid, timeout: None)
-    monkeypatch.setattr(session_reuse, "prepare", lambda channel, *, force=False: None)
-    calls["send_results"] = [{"sent": True}]
-    calls["poll_results"] = []
-    return calls
+    """Stubbed browser; queues are consumed in order. An empty poll queue makes
+    `_eval` return None forever (never a result)."""
+    return FbWriteHarness(fw, poll_re=POLL_RE, send_re=SEND_RE).patch(monkeypatch)
 
 
 def ok_result(**over):
@@ -197,3 +175,15 @@ def test_bad_audience_is_rejected_before_any_browser_work(harness):
         FacebookChannel()._post(text="x", audience="everyone", timeout=30)
     assert exc.value.code == "BAD_INPUT"
     assert harness["evals"] == []
+
+
+def test_is_facebook_url_parses_hostname_not_substring():
+    from agent_reach.channels._facebook_write import _is_facebook_url
+
+    assert _is_facebook_url("https://www.facebook.com/story")
+    assert _is_facebook_url("https://m.facebook.com/")
+    assert _is_facebook_url("https://fb.watch/abc")
+    assert not _is_facebook_url("https://notfacebook.com.evil.example/")
+    assert not _is_facebook_url("https://facebook.com.evil.example/")
+    assert not _is_facebook_url("")
+    assert not _is_facebook_url("about:blank")

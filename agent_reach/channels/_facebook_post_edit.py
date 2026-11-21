@@ -6,7 +6,7 @@ Replays Facebook's own GraphQL `ComposerStoryEditMutation` and
 the same fire-and-poll pipeline as `_facebook_comment.py` / `_facebook_write.py`.
 
 The mutations were captured once from the real composer UI via
-scripts/capture_fb_post_edit.py and kept sanitized in `_fb_post_vars.json`
+scripts/capture_fb_post_edit.py and kept sanitized in `_fb_post_edit_vars.json`
 (per-kind `params` + `variables` + `doc_id`; actor/uid -> "0", uuids ->
 zero-uuid, epochs -> 0). `doc_id` is a persisted-query id that rotates with FB
 builds — re-capture if edits/deletes start failing with "document not found".
@@ -28,7 +28,6 @@ import base64
 import json
 import re
 import time
-import urllib.parse
 
 from agent_reach.runtime.result import (
     BAD_INPUT,
@@ -37,15 +36,16 @@ from agent_reach.runtime.result import (
     make_item,
 )
 
-from ._facebook_react import _check_url, _ensure_post_loaded
+from ._facebook_react import _check_url, _ensure_post_loaded, _post_id_of
 from ._facebook_write import (
     _eval,
     _fb_target,
     _result_key,
     _wait_ready,
     classify_result,
+    fb_send_js,
+    fb_write_target,
     load_skeleton_sections,
-    prepare_facebook,
     send_mutation,
 )
 
@@ -55,12 +55,10 @@ _DOC = {
     "delete": ("useCometFeedStoryDeleteMutation", "29557927263819997"),
 }
 
-_VARS_DOC = load_skeleton_sections("_fb_post_vars.json")
-_PARAMS = {}
+_VARS_DOC = load_skeleton_sections("_fb_post_edit_vars.json")
 _VARS = {}
 for _kind in ("edit", "delete"):
     _entry = _VARS_DOC["sections"].get(_kind) or {}
-    _PARAMS[_kind] = _entry.get("params") or {}
     _VARS[_kind] = _entry.get("variables") or {}
 
 # base64 OR base64url alphabet (+ optional '=' padding), like comment ids.
@@ -161,60 +159,21 @@ _UID_JS = (
 # window[<key>] under a per-call key so overlapping edits cannot clobber each
 # other's result (same fire-and-poll pattern as _facebook_comment). The __FB_*
 # placeholders are substituted before eval; __FB_STORY/__FB_TEXT/__FB_PRIVACY
-# are JSON values, __FB_VARS/__FB_PARAMS are JS object literals. The
+# are JSON values, __FB_VARS is a JS object literal. The
 # KEY+"_sent" sentinel is set synchronously BEFORE fetch fires: if _eval's
 # transport times out but the expression actually executed, the retry sees the
 # sentinel and returns early instead of firing the mutation a second time.
-_EDIT_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-const dtsg=(req("DTSGInitialData")||{}).token;
-const lsd=(req("LSD")||{}).token;
-const site=req("SiteData")||{};
-if(!uid||!dtsg||!lsd)return{error:"no_tokens",hasUid:!!uid,hasDtsg:!!dtsg,hasLsd:!!lsd};
-const vars=__FB_VARS;
+# body_slice stays 4000 — the story_edit payload is huge.
+_EDIT_JS = fb_send_js(
+    """\
 vars.input.story_id=__FB_STORY;
 vars.input.message.text=__FB_TEXT;
 vars.input.message.ranges=[];
 vars.input.actor_id=uid;
 vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
 if(vars.input.logging&&vars.input.logging.composer_session_id){vars.input.logging.composer_session_id=crypto.randomUUID()}
-if(vars.input.audience){vars.input.audience.privacy=__FB_PRIVACY}
-const p=new URLSearchParams();
-const tmpl=__FB_PARAMS;
-for(const k in tmpl)p.set(k,tmpl[k]);
-p.set("av",uid);p.set("__user",uid);p.set("__a","1");
-p.set("__comet_req",site.comet_req||"15");
-p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
-p.set("lsd",lsd);
-p.set("__spin_r",site.__spin_r||"");p.set("__spin_b",site.__spin_b||"");p.set("__spin_t",site.__spin_t||"");
-p.set("__rev",site.client_revision||site.__spin_r||"");p.set("__hsi",site.hsi||"");p.set("__hs",site.hsp||"");
-p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,4000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+if(vars.input.audience){vars.input.audience.privacy=__FB_PRIVACY}""",
+    r"""\
 out.dataKeys=j.data?Object.keys(j.data):[];
 const se=(j.data||{}).story_edit||{};
 out.storyId=((se.story||{}).id)||null;
@@ -225,66 +184,20 @@ out.storyId=((se.story||{}).id)||null;
 // negative even though the mutation landed.
 const _txt=JSON.stringify(vars.input.message.text);
 const _txtEsc=_txt.replace(/[\u0080-￿]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"));
-out.textEchoed=t.indexOf(_txt)>=0||t.indexOf(_txtEsc)>=0;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.textEchoed=t.indexOf(_txt)>=0||t.indexOf(_txtEsc)>=0;""",
+    body_slice=4000,
+)
 
-_DELETE_JS = r"""
-(()=>{try{
-const req=window.require;
-if(!req)return{error:"no_require"};
-const uid=(req("CurrentUserInitialData")||{}).USER_ID;
-const dtsg=(req("DTSGInitialData")||{}).token;
-const lsd=(req("LSD")||{}).token;
-const site=req("SiteData")||{};
-if(!uid||!dtsg||!lsd)return{error:"no_tokens",hasUid:!!uid,hasDtsg:!!dtsg,hasLsd:!!lsd};
-const vars=__FB_VARS;
+_DELETE_JS = fb_send_js(
+    """\
 vars.input.story_id=__FB_STORY;
 vars.input.actor_id=uid;
-vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);
-const p=new URLSearchParams();
-const tmpl=__FB_PARAMS;
-for(const k in tmpl)p.set(k,tmpl[k]);
-p.set("av",uid);p.set("__user",uid);p.set("__a","1");
-p.set("__comet_req",site.comet_req||"15");
-p.set("fb_dtsg",dtsg);p.set("jazoest",site.jazoest||"");
-p.set("lsd",lsd);
-p.set("__spin_r",site.__spin_r||"");p.set("__spin_b",site.__spin_b||"");p.set("__spin_t",site.__spin_t||"");
-p.set("__rev",site.client_revision||site.__spin_r||"");p.set("__hsi",site.hsi||"");p.set("__hs",site.hsp||"");
-p.set("fb_api_req_friendly_name",__FB_FRIENDLY);
-p.set("fb_api_caller_class","RelayModern");
-p.set("doc_id",__FB_DOC);
-p.set("server_timestamps","true");
-p.set("variables",JSON.stringify(vars));
-const KEY=__FB_KEY;
-if(window[KEY+"_sent"])return{sent:true,dup:true};
-window[KEY+"_sent"]=true;
-window[KEY]=null;
-fetch("/api/graphql/",{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
-body:p.toString()}).then(r=>r.text().then(t=>{
-const out={status:r.status,actorId:uid,body:t.slice(0,4000)};
-const clean=t.replace(/^for\s*\(\s*;\s*\)\s*;\s*/,"");
-let j=null;
-try{j=JSON.parse(clean)}catch(e){
-for(const line of clean.split("\n")){
-if(!line.trim())continue;
-try{const o=JSON.parse(line);if(o&&(o.data||o.errors)){j=o;break}}catch(_){}
-}
-}
-if(j){
-out.parsed=true;
-out.errors=Array.isArray(j.errors)?j.errors.slice(0,5):null;
+vars.input.client_mutation_id=String(Math.floor(Math.random()*900)+100);""",
+    """\
 out.dataKeys=j.data?Object.keys(j.data):[];
-out.deletedStoryId=(((j.data||{}).story_delete||{}).deleted_story_id)||null;
-}else{out.parsed=false}
-window[KEY]=out;
-})).catch(e=>{window[KEY]={error:String(e)}});
-return{sent:true}}catch(e){return{error:String(e)}}})()
-"""
+out.deletedStoryId=(((j.data||{}).story_delete||{}).deleted_story_id)||null;""",
+    body_slice=4000,
+)
 
 _JS = {"edit": _EDIT_JS, "delete": _DELETE_JS}
 
@@ -333,21 +246,6 @@ def _story_fields(story_id: str) -> tuple[str, str] | None:
     return uid, fbid
 
 
-def _post_id_from_url(url: str) -> str | None:
-    try:
-        parts = urllib.parse.urlparse(url)
-    except (TypeError, ValueError):
-        return None
-    m = re.search(r"/posts/([0-9]+)", parts.path or "")
-    if m:
-        return m.group(1)
-    qs = urllib.parse.parse_qs(parts.query)
-    fbid = (qs.get("story_fbid") or [None])[0]
-    if fbid and re.fullmatch(r"[0-9]+", str(fbid)):
-        return str(fbid)
-    return None
-
-
 def _post_target(target: object) -> tuple[str, str]:
     """Resolve user input to (permalink, post_id).
 
@@ -363,7 +261,7 @@ def _post_target(target: object) -> tuple[str, str]:
     if not isinstance(target, str):
         raise ReachError(BAD_INPUT, "url must be a facebook.com post permalink or a raw story id")
     _check_url(target)
-    post_id = _post_id_from_url(target)
+    post_id = _post_id_of(target)
     if not post_id:
         raise ReachError(
             BAD_INPUT,
@@ -424,7 +322,7 @@ def _resolve_privacy(target_id: str, post_id: str, timeout: float) -> dict:
                 f"Ambiguous post privacy — {info['count']} privacy nodes match post id {post_id}; refusing to proceed",
             )
         if info.get("count") == 1 and isinstance(info.get("privacy"), dict):
-            if _post_id_from_url(info.get("href") or "") == post_id:
+            if _post_id_of(info.get("href") or "") == post_id:
                 return info["privacy"]
             # Page navigated away from the target post — keep polling.
         last = info
@@ -455,7 +353,6 @@ def _send_mutation(kind: str, target_id: str, *, deadline: float, **fields) -> d
     key = _result_key("__fbPostResult")
     expr = (
         _JS[kind]
-        .replace("__FB_PARAMS", json.dumps(_PARAMS[kind]))
         .replace("__FB_VARS", json.dumps(_VARS[kind], ensure_ascii=False))
         .replace("__FB_FRIENDLY", json.dumps(friendly))
         .replace("__FB_DOC", json.dumps(doc_id))
@@ -544,29 +441,13 @@ def _check_graphql(kind: str, out: dict, *, story_id: str | None = None, text: s
         )
 
 
-def _load_target(timeout: float):
-    """Shared browser setup: returns (tid, deadline, left)."""
-    prepare_facebook()
-    deadline = time.monotonic() + timeout
-
-    def left(cap: float) -> float:
-        return max(1.0, min(deadline - time.monotonic(), cap))
-
-    target = _fb_target(create=True)
-    if not target:
-        raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
-    tid = target["id"]
-    _wait_ready(tid, left(25))
-    return tid, deadline, left
-
-
 def facebook_post_edit(*, url: str, text: str, timeout: float) -> list:
     """Edit the caller's own Facebook post text, preserving its audience."""
     if not isinstance(text, str) or not text.strip():
         raise ReachError(BAD_INPUT, "text must be a non-empty string")
     permalink, post_id = _post_target(url)
 
-    tid, deadline, left = _load_target(timeout)
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
     _ensure_post_loaded(tid, permalink, left(25))
     story_id, story_uid = _resolve_story(tid, post_id, left(20))
     _check_ownership(story_uid, _session_uid(tid, left(10)))
@@ -604,7 +485,7 @@ def facebook_post_delete(*, url: str, confirm: bool, timeout: float) -> list:
         )
     permalink, post_id = _post_target(url)
 
-    tid, deadline, left = _load_target(timeout)
+    deadline, left, tid = fb_write_target(timeout, target_fn=_fb_target, wait_fn=_wait_ready)
     _ensure_post_loaded(tid, permalink, left(25))
     story_id, story_uid = _resolve_story(tid, post_id, left(20))
     _check_ownership(story_uid, _session_uid(tid, left(10)))

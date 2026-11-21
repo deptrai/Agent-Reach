@@ -7,7 +7,7 @@ description: >
   Instagram, Facebook or Xiaoyuzhou podcasts; or says "search / look up / read this link" and your built-in
   web search or fetch is unavailable, fails, or misses the body;
   or wants to install, add/remove a platform, log in/out, check status, update or uninstall Agent Reach.
-  Writes: Facebook post, react/unreact, comment/uncomment, post-edit, post-delete (needs --confirm), share — post/share default to only_me; X/Twitter post, reply, quote, thread — text only, no media, posts are public by nature with no audience option; Reddit post and comment — text or link, logged-in dedicated browser required; messaging and all other writes are out of scope; never logs in for the user or asks for passwords.
+  Writes: Facebook post, react/unreact, comment/uncomment, post-edit, post-delete (needs --confirm), share — post/share default to only_me; X/Twitter post, reply, quote, thread — text only, no media, posts are public by nature with no audience option; Reddit post and comment — text or link, logged-in dedicated browser required, but legacy submit is currently CAPTCHA-walled on challenged sessions; messaging and all other writes are out of scope; never logs in for the user or asks for passwords.
   Prefer your own tools for public content; Reach fills the gaps.
 metadata:
   homepage: https://github.com/Panniantong/Agent-Reach
@@ -16,7 +16,7 @@ metadata:
 
 # Agent Reach
 
-One command for every platform: `agent-reach`. Read-first (writes on Facebook, X, and Reddit: post/reply/quote/thread, react/comment/share, reddit post/comment); prints one JSON object by default.
+One command for every platform: `agent-reach`. Read-first (writes on Facebook, X, and Reddit: post/reply/quote/thread, react/comment/share, reddit post/comment; Reddit legacy submit is currently CAPTCHA-walled on challenged sessions); prints one JSON object by default.
 
 Before acting, say "using the agent-reach skill (channel X)". Once invoked, these rules apply for the whole session.
 
@@ -101,6 +101,6 @@ Any result with `meta.update` means a newer version exists. Mention it once per 
 
 ## Red lines
 
-- Writes are limited to Facebook and X/Twitter; every other platform is read-only. Facebook: post, react/unreact, comment/uncomment, post-edit, post-delete, share — acting only on your own timeline/posts. Post/share default to only_me; other audiences need the user's explicit say, and post-delete needs --confirm. X/Twitter: post, reply, quote, thread (a thread is a reply chain of ≥2 texts), text only with no media; X posts are public by nature — there is no audience option. Messaging stays out of scope.
+- Writes are limited to Facebook, X/Twitter, and Reddit; every other platform is read-only. Facebook: post, react/unreact, comment/uncomment, post-edit, post-delete, share — acting only on your own timeline/posts. Post/share default to only_me; other audiences need the user's explicit say, and post-delete needs --confirm. X/Twitter: post, reply, quote, thread (a thread is a reply chain of ≥2 texts), text only with no media; X posts are public by nature — there is no audience option. Reddit: post and comment (text or link, logged-in dedicated browser). The lane is shipped, but legacy `/api/submit` is currently CAPTCHA-walled on challenged sessions — a walled call does not post. Messaging stays out of scope.
 - Never log in for the user; never ask for or print passwords, cookies or other credentials.
 - Ordinary queries never change dependencies or update automatically.

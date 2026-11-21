@@ -101,7 +101,7 @@ This table reflects the current release.
 | web | default | web search, page reading (fallback) | nothing |
 | v2ex | default | hot topics, nodes, topics with replies, users | nothing |
 | bilibili | default | search, video info, trending, subtitles | nothing; subtitles need a login (QR scan) |
-| reddit | optional | search posts, read text/comments, browse a subreddit | login |
+| reddit | optional | search posts, read text/comments, browse a subreddit; writes: post/comment (text or link; legacy submit is currently CAPTCHA-walled, session-dependent) | login |
 | linkedin | optional | search jobs, read job details | public jobs need nothing; in-site search needs a login |
 | xiaohongshu | optional | search notes, read text, view comments | login |
 | xueqiu | optional | real-time quotes, stock search, hot posts, hot stocks | quotes need nothing; hot posts and stocks need a login |
@@ -181,7 +181,7 @@ Platforms change and tools break all the time. Switching tools only means updati
 
 ## Security
 
-- **Read-first**: it searches and reads; it never sends messages. The only writes are on Facebook — `post`/`react`/`unreact`/`comment`/`uncomment`/`post-edit`/`post-delete`/`share` — acting only on your own timeline/posts; post and share default to only_me, delete needs `--confirm`.
+- **Read-first**: it searches and reads; it never sends messages. Writes are limited to Facebook, X/Twitter, and Reddit. Facebook: `post`/`react`/`unreact`/`comment`/`uncomment`/`post-edit`/`post-delete`/`share` — acting only on your own timeline/posts; post and share default to only_me, delete needs `--confirm`. X/Twitter: `post`/`reply`/`quote`/`thread` (text only, posts are public). Reddit: `post`/`comment` (text or link; the lane is shipped, but legacy submit is currently CAPTCHA-walled and session-dependent).
 - **It never logs in for you or asks for your password.** Some platforms reuse a login already on your computer (that one site only, your browser unchanged); a login window opens only when you really need to sign in again, and you do it yourself.
 - **The dedicated browser is open to this computer only**; other machines can't connect to it.
 - **Use a secondary account.** The reused login is usually your main account, and platforms may restrict accounts used for automation. To switch, just tell your agent.

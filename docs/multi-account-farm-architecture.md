@@ -16,7 +16,7 @@ dự kiến nâng 256GB + dual CPU = 36C/72T). Ưu tiên **stealth** để giả
 | Cơ chế | `TwitterHttpClient` gọi thẳng `x.com/i/api/graphql` với `auth_token`+`ct0` | Chrome headless qua Puppeteer | Chrome thật (CloakBrowser ưu tiên) + extension bridge + daemon `127.0.0.1:19825` |
 | Tài nguyên | Vài MB/account, 1 process | 200–500MB/instance | ~1–1.5GB/account (container riêng) |
 | Kết quả trả về | `tweetId`/`url`/`scheduledTweetId` — xác nhận được | Mù (không có id) | Tùy backend |
-| Write | Đầy đủ: post/thread/reply/quote/schedule/media | Đầy đủ nhưng fragile | Mới có Facebook post (experimental) |
+| Write | Đầy đủ: post/thread/reply/quote/schedule/media | Đầy đủ nhưng fragile | Facebook 8 verb + X text-only (post/reply/quote/thread) + Reddit post/comment (code ✅, CAPTCHA-walled) |
 | Fingerprint | Node.js TLS fingerprint ≠ Chrome JA3; header tối thiểu | `HeadlessChrome` dễ detect | Tốt nhất — fingerprint thật |
 | Nhân bản | Rất cao (cookie jar) | Trung bình | 1 container : 1 account |
 | IP per account | ✅ Wired: `link()` copy registry proxy → pool `proxy`, lane dial qua `undici.ProxyAgent` | Cùng IP host | Proxy container riêng — sạch |
@@ -48,7 +48,11 @@ dự kiến nâng 256GB + dual CPU = 36C/72T). Ưu tiên **stealth** để giả
   `ComposerStoryCreateMutation` doc-id `"29221801510819514"` trong page đã login qua CDP
   `Runtime.evaluate`) + X (`channels/_twitter_write.py` — replay `CreateTweet` qua in-page
   fetch trong dedicated browser: post/reply/quote/thread, text-only; media descoped vì
-  X upload qua chunked `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL).
+  X upload qua chunked `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL)
+  + Reddit (`channels/_reddit_write.py` — `post`/`comment` replay `POST /api/submit` và
+  `POST /api/comment`, modhash `uh` từ `/api/me.json`; đã đăng ký `WRITE_ACTIONS["reddit"]`.
+  Live verify fail: session hiện tại `BAD_CAPTCHA` trên mọi legacy submit — lane chưa post
+  được cho đến khi có session không bị challenge).
   Writes dưới `REACH_ACCOUNT` ghi ledger (`farm.record_action` qua dispatch — success
   tính quota, failure vẫn tính attempt).
 - **CloakBrowser** (`docs/cloakbrowser.md`, `browser_watcher.py:73-93`): stealth Chromium
@@ -80,14 +84,25 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 
 ## 4. Việc còn lại để vận hành thực tế
 
-### 4a. Write lanes (đang build) — ưu tiên cao
+### 4a. Write lanes — trạng thái
 
 | # | Việc | Ghi chú |
 |---|---|---|
 | 1 | X write lane: post/reply/quote/thread ✅ (text-only); còn media | Đã ship `_twitter_write.py`: replay `CreateTweet` qua in-page fetch (X không có `window.require` — token mint từ webpack registry). Media descoped: `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL |
-| 2 | LinkedIn / Reddit / Instagram / TikTok write lanes | Cùng pattern; thứ tự theo ưu tiên farm |
+| 2 | Platform write lanes còn lại | Reddit ✅ code / ⚠️ CAPTCHA-walled; LinkedIn · Instagram · TikTok ⛔ — bảng trạng thái ngay dưới |
 | 3 | **Externalize doc-ids/queryIds** ra config/data file | XActions phải patch `endpoint.url` khi X đổi query ID — hardcode trong code = mỗi lần drift là 1 PR. Doc-id nên hot-reloadable (file riêng + `agent-reach doctor` cảnh báo drift) |
 | 4 | Mutation capture pipeline | `docs/fb-mutation-capture.md` đã có — chuẩn hóa cho các platform khác (record → extract persisted query → sinh `_<platform>_vars.json`) |
+
+#### Platform write lanes
+
+| Platform | Trạng thái | Ghi chú |
+|---|---|---|
+| X | ✅ Shipped | `post`/`reply`/`quote`/`thread`, text-only (`_twitter_write.py`, replay `CreateTweet`). Media descoped: upload chunked `upload.twitter.com`, không phải GraphQL |
+| Facebook | ✅ Shipped | 8 verb: `post`, `react`/`unreact`, `comment`/`uncomment`, `post-edit`, `post-delete`, `share` (`_facebook_write.py`). post/share mặc định only_me; post-delete cần `--confirm` |
+| Reddit | ✅ code / ⚠️ CAPTCHA-walled | `post` + `comment` (`_reddit_write.py`): `POST /api/submit` + `POST /api/comment`, modhash `uh` từ `/api/me.json`, đã trong `WRITE_ACTIONS["reddit"]`. Live verify trên `Objective_Bet_368` fail `BAD_CAPTCHA` mọi legacy submit (r/test, profile, old.reddit.com); `gql.reddit.com` cross-origin từ page cũng fail. Chưa post được cho đến khi có session không bị challenge. Map lỗi: RATELIMIT→`RATE_LIMITED`, không modhash→`NEED_LOGIN`, validation→`BAD_INPUT`, `BAD_CAPTCHA`→`UPSTREAM_BROKEN` |
+| LinkedIn | ⛔ network + login blocked | Spike 15.1: `NEEDS_OPERATOR_LOGIN` và `linkedin.com` `ERR_CONNECTION_RESET` từ host này (Cloudflare edge; x.com thì vào được). Không có write code. Story 15.2 chưa làm — chờ operator |
+| Instagram | ⛔ login + post descoped | Spike 15.5: dedicated browser kẹt CAA account picker, không có `sessionid` → `NEED_LOGIN`. `post` descoped (rupload media). `comment` (`POST /api/v1/web/comments/<id>/add/`) và `like` replayable sau khi login. Story 15.6 chưa làm — chờ operator |
+| TikTok | ⛔ login + post descoped | Spike 15.7: guest session (`NEED_LOGIN`). Mint `X-Bogus` đã verify live qua `byted_acrawler.frontierSign`. `like`/`comment` replayable-conditional khi có session. Video `post` descoped (chunked upload) |
 
 ### 4b. Guardrail per-account — ưu tiên cao
 
@@ -126,6 +141,9 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 
 **Gợi ý thứ tự làm:** 3 → 1 (doc-ids externalize trước khi viết lane mới) → 5+7
 (guardrail trước khi có write) → 8+9 (containerize + fleet) → 6, 10, 11 → 12–14.
+Cập nhật 2026-11-22: mục 1 và 5–14 đã ship. Trạng thái lane từng platform nằm ở bảng
+**Platform write lanes** (mục 4a): Reddit đã có code nhưng CAPTCHA-walled; story 15.2
+(LinkedIn) và 15.6 (Instagram) còn mở, chờ operator.
 
 ---
 

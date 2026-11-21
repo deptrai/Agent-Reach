@@ -9,7 +9,7 @@ description: >
   写操作：Facebook post、react/unreact、comment/uncomment、post-edit、
   post-delete、share（发帖/分享默认仅自己可见，删除须 --confirm）；
   X/Twitter post、reply、quote、thread（纯文本无媒体，帖子天然公开、无受众选项）；
-  Reddit post、comment（文本或链接，须登录专用浏览器）；
+  Reddit post、comment（文本或链接，须登录专用浏览器；legacy submit 目前常被 CAPTCHA 拦住，视会话而定）；
   私信等其他写操作一律不做；
   不替用户登录、不索要密码。
   公开内容优先用 Agent 自带工具，Reach 补缺口。
@@ -20,7 +20,7 @@ metadata:
 
 # Agent Reach
 
-一个命令读所有平台：`agent-reach`。读为主（Facebook、X、Reddit 支持写：post/reply/quote/thread、react/comment/share、reddit post/comment），默认输出一行 JSON。
+一个命令读所有平台：`agent-reach`。读为主（Facebook、X、Reddit 支持写：post/reply/quote/thread、react/comment/share、reddit post/comment；Reddit legacy submit 目前常被 CAPTCHA 拦住），默认输出一行 JSON。
 
 动手前先说一句"用 agent-reach skill（X 渠道）"。本 skill 被调用后全程有效，以下规则一直适用。
 
@@ -105,6 +105,6 @@ agent-reach read <链接>                   # 按链接自动选渠道
 
 ## 红线
 
-- 写操作仅限 Facebook 与 X/Twitter，其余平台只读。Facebook：post、react/unreact、comment/uncomment、post-edit、post-delete、share，只作用你自己的主页/帖子；发帖和分享默认 only_me，其他受众须用户明示，post-delete 须 --confirm。X/Twitter：post、reply、quote、thread（thread 用 ≥2 条文本发回复链），纯文本不支持媒体；X 帖子天然公开，没有受众选项。私信一律不做。
+- 写操作仅限 Facebook、X/Twitter 与 Reddit，其余平台只读。Facebook：post、react/unreact、comment/uncomment、post-edit、post-delete、share，只作用你自己的主页/帖子；发帖和分享默认 only_me，其他受众须用户明示，post-delete 须 --confirm。X/Twitter：post、reply、quote、thread（thread 用 ≥2 条文本发回复链），纯文本不支持媒体；X 帖子天然公开，没有受众选项。Reddit：post、comment（文本或链接，须登录专用浏览器）；代码已接上，但 legacy `/api/submit` 目前常被 CAPTCHA 拦住（视会话而定）——被拦住时不会发成功。私信一律不做。
 - 不替用户登录，不索要或输出密码、Cookie 等凭据。
 - 普通查询不改依赖、不自动更新。

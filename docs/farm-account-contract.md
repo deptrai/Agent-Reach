@@ -184,7 +184,7 @@ writes no ledger row. A refusal surfaces as a normal JSON envelope:
   proxy → `PLATFORM_BLOCKED`. `REACH_PROXY_CHECK=0` bypasses;
   `REACH_PROXY_CHECK_TTL` overrides the 60s verdict cache.
 - **Write quota** (`dispatch._enforce_write_quota`): only verbs in
-  `WRITE_ACTIONS` (twitter post/reply/quote/thread, the facebook write set)
+  `WRITE_ACTIONS` (twitter post/reply/quote/thread, reddit post/comment, the facebook write set)
   count; reads and unlisted verbs never touch the ledger. Caps default in
   `DEFAULT_CAPS`; override with `REACH_CAP_<CLASS>` (`post-edit` →
   `REACH_CAP_POST_EDIT`). `0` refuses every write; a class with no entry is

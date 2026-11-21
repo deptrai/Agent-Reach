@@ -107,7 +107,7 @@ This table reflects the current release.
 | xueqiu | optional | real-time quotes, stock search, hot posts, hot stocks | quotes need nothing; hot posts and stocks need a login |
 | boss | optional | job and JD search | login |
 | xiaoyuzhou | optional | podcast transcription | Groq key |
-| twitter | experimental | search tweets, profiles, user tweets, threads | login |
+| twitter | experimental | search tweets, profiles, user tweets, threads; writes: post/reply/quote/thread (text only, posts are public) | login |
 | facebook | experimental | search, profiles, writes (post/react/comment/edit/delete/share, default only_me) | login |
 | instagram | experimental | user search, profiles, user posts | login |
 

@@ -17,10 +17,10 @@ Read when the user asks what can be fetched or how complete a result is. Declare
 | YouTube | 搜索、标题、简介；原生工具可能取得部分评论及字幕正文 | search/read/subtitle/transcribe；当前没有统一 comments 动作；轨道列表不等于字幕正文，无字幕时转录依赖相应工具 |
 | B 站 | 搜索、简介；部分公开接口可返回评论及父子 ID | search/read/hot/subtitle；当前没有统一 comments 动作；字幕随视频和访问路径而异 |
 | Reddit | 搜索、正文、部分评论；某些公开 JSON 可含父子 ID | 浏览器 search/read/subreddit；登录依所选路径决定，不保证完整评论树、全部回复；不提供发评论 |
-| X/Twitter | 搜索命中的公开单帖；部分官方公开嵌入可返回全文 | search/profile/tweets/thread；单帖可读不代表回复流可读，不保证完整评论树 |
+| X/Twitter | 搜索命中的公开单帖；部分官方公开嵌入可返回全文 | 读：search/profile/tweets/thread；写：post/reply/quote/thread（≥2 条文本发回复链），纯文本无媒体，帖子公开可见、无受众选项；单帖可读不代表回复流可读，不保证完整评论树 |
 | 小红书 | 公开列表或索引可能有笔记 ID、作者、标题，空字段不能补猜 | search/read/comments；文字描述、顶级评论及已加载回复；不保证全部评论，不声称理解图片/视频 |
 | Instagram | 部分索引和主页浅层信息；HTML 应用壳不算帖文 | search 搜用户、profile 主页、posts 指定用户帖子描述；无统一评论动作，不声称理解图片/视频 |
-| Facebook | 部分索引或 HTML 摘要；摘要可能被截断 | search/profile；无统一详情或评论动作，不把搜索摘要当全文 |
+| Facebook | 部分索引或 HTML 摘要；摘要可能被截断 | 读：search/profile；写：post/react/unreact/comment/uncomment/post-edit/post-delete/share（post/share 默认 only_me，post-delete 须 --confirm），须登录专用浏览器；无统一详情或评论动作，不把搜索摘要当全文 |
 | LinkedIn | 搜公开职位、读公开 JD | jobs/read 先尝试公开网页；指定 opencli 才直接走站内；不保证所有职位可读 |
 | BOSS | 搜索索引中可能有职位摘要 | search/read 职位列表与 JD；不能根据编码薪资猜数字；详情后备能力依渠道声明 |
 | V2EX | 主题、正文及公开回复 | hot/node/read/user；返回范围以本次响应为准，不保证隐藏或缺失回复 |

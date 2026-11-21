@@ -43,9 +43,13 @@ dự kiến nâng 256GB + dual CPU = 36C/72T). Ưu tiên **stealth** để giả
   - **Chưa có**: quota *theo account + theo ngày* cho writes (model `action-caps` của XActions:
     ledger rolling-24h, e.g. 2400 posts / 500 likes / 400 follows). Model của Reach là
     per-channel trên 1 máy — vừa khít kiến trúc container-per-account, chỉ thiếu cap writes.
-- **Write lane**: chỉ Facebook (`channels/_facebook_write.py` — replay persisted GraphQL
+- **Write lane**: Facebook (`channels/_facebook_write.py` — replay persisted GraphQL
   `ComposerStoryCreateMutation` doc-id `"29221801510819514"` trong page đã login qua CDP
-  `Runtime.evaluate`). Twitter channel read-only (`search/profile/tweets/thread`).
+  `Runtime.evaluate`) + X (`channels/_twitter_write.py` — replay `CreateTweet` qua in-page
+  fetch trong dedicated browser: post/reply/quote/thread, text-only; media descoped vì
+  X upload qua chunked `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL).
+  Writes dưới `REACH_ACCOUNT` ghi ledger (`farm.record_action` qua dispatch — success
+  tính quota, failure vẫn tính attempt).
 - **CloakBrowser** (`docs/cloakbrowser.md`, `browser_watcher.py:73-93`): stealth Chromium
   fork — giải quyết bài toán fingerprint-correlation giữa các container (80 headless Chrome
   có canvas/WebGL gần giống nhau — proxy khác nhau **không** cứu được tương quan này).
@@ -79,7 +83,7 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 
 | # | Việc | Ghi chú |
 |---|---|---|
-| 1 | X write lane: post/reply/quote/thread + media | Pattern `_facebook_write.py`: replay persisted GraphQL trong page login, params từ `window.require` |
+| 1 | X write lane: post/reply/quote/thread ✅ (text-only); còn media | Đã ship `_twitter_write.py`: replay `CreateTweet` qua in-page fetch (X không có `window.require` — token mint từ webpack registry). Media descoped: `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL |
 | 2 | LinkedIn / Reddit / Instagram / TikTok write lanes | Cùng pattern; thứ tự theo ưu tiên farm |
 | 3 | **Externalize doc-ids/queryIds** ra config/data file | XActions phải patch `endpoint.url` khi X đổi query ID — hardcode trong code = mỗi lần drift là 1 PR. Doc-id nên hot-reloadable (file riêng + `agent-reach doctor` cảnh báo drift) |
 | 4 | Mutation capture pipeline | `docs/fb-mutation-capture.md` đã có — chuẩn hóa cho các platform khác (record → extract persisted query → sinh `_<platform>_vars.json`) |

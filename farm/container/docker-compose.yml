@@ -22,6 +22,9 @@ services:
       REACH_BROWSER_PROXY: ${REACH_BROWSER_PROXY:?REACH_BROWSER_PROXY is required}
       REACH_BROWSER_PROFILE: ${REACH_BROWSER_PROFILE:-linux-desktop-chrome}
       FARM_BOOT_CHECK: ${FARM_BOOT_CHECK:-1}
+    labels:                               # fleet manager discovery (story 14.4)
+      com.agent-reach.farm: "1"
+      com.agent-reach.account: ${REACH_ACCOUNT:?REACH_ACCOUNT is required}
     volumes:
       - home:/home/farm/.agent-reach      # per-account HOME slice (named volume)
     stop_grace_period: 30s                # let the watcher save session cookies

@@ -63,6 +63,7 @@ For the user:
   agent-reach farm account add|list|env|ledger   multi-account farm registry
   agent-reach farm sync-docids [--apply]   sync X doc-ids to the XActions cache (dry-run)
   agent-reach farm drift [--once]          doc-id drift probe + alert; loops every 6h (jittered) unless --once
+  agent-reach fleet list|poll [--once]|relogin <container>   farm container health + login reopen
   agent-reach browser profiles|use ID    choose an existing local login source
   agent-reach skill [link|unlink <dir>]   where the agent skill is; link it for another AI, or unlink one for good
   agent-reach doctor [--text] [--probe-docids]
@@ -630,6 +631,40 @@ def _cmd_farm(args: Sequence[str]) -> int:
                       "valid ops: add <name> --proxy <url>, list, env <name>, ledger <name>")
 
 
+def _cmd_fleet(args: Sequence[str]) -> int:
+    from . import fleet
+    parser = _Parser(prog="fleet", add_help=False)
+    parser.add_argument("op", choices=("list", "poll", "relogin"))
+    parser.add_argument("name", nargs="?")
+    parser.add_argument("--channel", default=None)
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--interval", type=float, default=None)
+    try:
+        ns = parser.parse_args(list(args))
+    except _ParseExit as exc:
+        return _bad_input(None, "fleet", str(exc))
+    if ns.op == "list":
+        if ns.name or ns.channel or ns.once or ns.interval is not None:
+            return _bad_input(None, "fleet list", "usage: agent-reach fleet list")
+        return _mgmt("fleet list", lambda: {"containers": fleet.list_fleet()})
+    if ns.op == "poll":
+        if ns.name or ns.channel:
+            return _bad_input(None, "fleet poll",
+                              "usage: agent-reach fleet poll [--once] [--interval SECONDS]")
+        if ns.once:
+            if ns.interval is not None:
+                return _bad_input(None, "fleet poll", "--interval applies to the loop, not --once")
+            return _mgmt("fleet poll", fleet.poll_once)
+        fleet.run_forever(interval=ns.interval)
+        return _emit({"schema_version": SCHEMA_VERSION, "ok": False, "action": "fleet poll",
+                      "error": {"code": "INTERRUPTED", "message": "poll loop exited"}})
+    # relogin
+    if not ns.name or ns.once or ns.interval is not None:
+        return _bad_input(None, "fleet relogin",
+                          "usage: agent-reach fleet relogin <container> [--channel <ch>]")
+    return _mgmt("fleet relogin", fleet.relogin, ns.name, channel=ns.channel)
+
+
 def main(argv: Sequence[str]) -> int:
     global _SHOW_NOTICE
 
@@ -656,6 +691,8 @@ def main(argv: Sequence[str]) -> int:
         return _cmd_browser(rest)
     if head == "farm":
         return _cmd_farm(rest)
+    if head == "fleet":
+        return _cmd_fleet(rest)
     if head == "doctor":
         return _cmd_doctor(rest)
     if head == "skill":

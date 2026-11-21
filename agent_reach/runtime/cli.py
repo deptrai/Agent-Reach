@@ -63,6 +63,7 @@ For the user:
   agent-reach farm account add|list|env|ledger   multi-account farm registry
   agent-reach farm sync-docids [--apply]   sync X doc-ids to the XActions cache (dry-run)
   agent-reach farm drift [--once]          doc-id drift probe + alert; loops every 6h (jittered) unless --once
+  agent-reach farm metrics [--account N] [--hours H] [--file P]   per-account actions/errors + fleet health JSON sink
   agent-reach fleet list|poll [--once]|relogin <container>   farm container health + login reopen
   agent-reach browser profiles|use ID    choose an existing local login source
   agent-reach skill [link|unlink <dir>]   where the agent skill is; link it for another AI, or unlink one for good
@@ -572,16 +573,28 @@ def _cmd_farm(args: Sequence[str]) -> int:
     from . import farm
 
     parser = _Parser(prog="farm", add_help=False)
-    parser.add_argument("op", choices=("account", "sync-docids", "drift"))
+    parser.add_argument("op", choices=("account", "sync-docids", "drift", "metrics"))
     parser.add_argument("sub", nargs="?")
     parser.add_argument("name", nargs="?")
     parser.add_argument("--proxy", default=None)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--account", default=None)
+    parser.add_argument("--hours", type=float, default=None)
+    parser.add_argument("--file", dest="sink", default=None)
     try:
         ns = parser.parse_args(list(args))
     except _ArgError as exc:
         return _bad_input(None, "farm", str(exc))
+    if ns.op == "metrics":
+        if ns.sub or ns.name or ns.proxy or ns.apply or ns.once:
+            return _bad_input(None, "farm metrics",
+                              "usage: agent-reach farm metrics [--account NAME] [--hours N] [--file PATH]")
+        from . import farm_metrics
+
+        return _mgmt("farm metrics", farm_metrics.report, account=ns.account,
+                     window_hours=farm_metrics.DEFAULT_WINDOW_HOURS if ns.hours is None else ns.hours,
+                     sink=ns.sink)
     if ns.op == "drift":
         if ns.sub or ns.name or ns.proxy or ns.apply:
             return _bad_input(None, "farm drift",

@@ -113,19 +113,23 @@ def add_account(name: str, proxy: str) -> dict:
     created = not home.exists()
     home = account_home(name)
     now = int(time.time())
-    with closing(connect()) as conn:
-        try:
+
+    def _insert() -> None:
+        with closing(connect()) as conn:
             with conn:
                 conn.execute(
                     f"INSERT INTO accounts ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (name, proxy, str(home), now, "new", now, now),
                 )
-        except sqlite3.IntegrityError:
-            raise ReachError(BAD_INPUT, f"farm account already exists: {name}")
-        except Exception:
-            if created:
-                shutil.rmtree(home, ignore_errors=True)
-            raise
+
+    try:
+        _with_busy_retry(_insert)
+    except sqlite3.IntegrityError:
+        raise ReachError(BAD_INPUT, f"farm account already exists: {name}")
+    except Exception:
+        if created:
+            shutil.rmtree(home, ignore_errors=True)
+        raise
     return {
         "name": name,
         "proxy": proxy,
@@ -139,10 +143,15 @@ def add_account(name: str, proxy: str) -> dict:
 
 def list_accounts() -> list:
     """Every registry row as a JSON-safe dict (empty list when the table is empty)."""
-    with closing(connect()) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(f"SELECT {_COLUMNS} FROM accounts ORDER BY name").fetchall()
-    return [dict(row) for row in rows]
+
+    def _query():
+        with closing(connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                f"SELECT {_COLUMNS} FROM accounts ORDER BY name"
+            ).fetchall()
+
+    return [dict(row) for row in _with_busy_retry(_query)]
 
 
 def account_env(name: str) -> dict:
@@ -153,11 +162,15 @@ def account_env(name: str) -> dict:
     present when the row stores a non-empty proxy. Unknown account -> NEED_SETUP.
     """
     _validate_name(name)
-    with closing(connect()) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT proxy, home FROM accounts WHERE name = ?", (name,)
-        ).fetchone()
+
+    def _query():
+        with closing(connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                "SELECT proxy, home FROM accounts WHERE name = ?", (name,)
+            ).fetchone()
+
+    row = _with_busy_retry(_query)
     if row is None:
         raise ReachError(
             NEED_SETUP,

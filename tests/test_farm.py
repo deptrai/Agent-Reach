@@ -12,7 +12,7 @@ import pytest
 
 from agent_reach.runtime import cli as unified
 from agent_reach.runtime import farm, state
-from agent_reach.runtime.result import BAD_INPUT, NEED_SETUP, ReachError
+from agent_reach.runtime.result import BAD_INPUT, NEED_SETUP, UPSTREAM_BROKEN, ReachError
 
 ACCOUNT_FIELDS = {"name", "proxy", "home", "age", "ban_status", "created_at", "updated_at"}
 
@@ -325,6 +325,24 @@ def test_record_action_returns_inserted_row():
     assert row["action_class"] == "reply"
     assert row["outcome"] == "success"
     assert isinstance(row["ts"], int) and row["ts"] > 0
+
+
+def test_locked_db_surfaces_upstream_broken(monkeypatch):
+    def _locked():
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(farm, "connect", _locked)
+    calls = (
+        lambda: farm.add_account("a1", "http://p:1"),
+        farm.list_accounts,
+        lambda: farm.account_env("a1"),
+        lambda: farm.record_action("a1", "post", "success"),
+        lambda: farm.ledger_24h("a1"),
+    )
+    for call in calls:
+        with pytest.raises(ReachError) as excinfo:
+            call()
+        assert excinfo.value.code == UPSTREAM_BROKEN
 
 
 def test_connect_sets_busy_timeout_and_actions_log_schema():

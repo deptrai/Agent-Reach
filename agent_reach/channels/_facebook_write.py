@@ -25,6 +25,7 @@ from pathlib import Path
 
 from agent_reach.runtime.result import (
     NEED_LOGIN,
+    PERSISTED_QUERY_DEAD,
     RATE_LIMITED,
     UPSTREAM_BROKEN,
     ReachError,
@@ -271,7 +272,12 @@ def classify_result(out: dict, *, label: str, name: str, confirmed: Callable[[],
     errors = out.get("errors") or []
     if errors:
         message = _error_message(errors)
-        if any(w in message.lower() for w in ("login", "checkpoint", "session")):
+        lowered = message.lower()
+        # A rotated doc_id / dead persisted query is terminal for this lane —
+        # retrying the identical replay cannot help (farm-account-contract §4).
+        if "document" in lowered and "not found" in lowered:
+            raise ReachError(PERSISTED_QUERY_DEAD, f"{name} failed: {message}")
+        if any(w in lowered for w in ("login", "checkpoint", "session")):
             raise ReachError(NEED_LOGIN, f"Facebook session rejected: {message}")
         raise ReachError(UPSTREAM_BROKEN, f"{name} failed: {message}")
     return False

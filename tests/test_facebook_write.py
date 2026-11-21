@@ -11,7 +11,13 @@ import re
 import pytest
 
 from agent_reach.channels import _facebook_write as fw
-from agent_reach.runtime.result import NEED_LOGIN, RATE_LIMITED, UPSTREAM_BROKEN, ReachError
+from agent_reach.runtime.result import (
+    NEED_LOGIN,
+    PERSISTED_QUERY_DEAD,
+    RATE_LIMITED,
+    UPSTREAM_BROKEN,
+    ReachError,
+)
 from conftest_facebook import FbWriteHarness
 
 SEND_RE = re.compile(r"ComposerStoryCreateMutation")
@@ -112,6 +118,34 @@ def test_graphql_errors_map_to_upstream_broken(harness):
         fw.facebook_post(text="x", audience="only_me", timeout=30)
     assert exc.value.code == UPSTREAM_BROKEN
     assert "missing_required_variable_value" in exc.value.message
+
+
+def test_document_not_found_maps_to_persisted_query_dead(harness):
+    harness["poll_results"] = [
+        ok_result(storyUrl=None, storyId=None, newPostId=None, postId=None,
+                  errors=[{"message": 'The GraphQL document with ID "29221801510819514" was not found'}])
+    ]
+    with pytest.raises(ReachError) as exc:
+        fw.facebook_post(text="x", audience="only_me", timeout=30)
+    assert exc.value.code == PERSISTED_QUERY_DEAD
+
+
+def test_persisted_query_dead_is_final_and_non_pausing():
+    from agent_reach.runtime.dispatch import BACKEND_PAUSE_SECONDS
+    from agent_reach.runtime.result import FINAL_CODES
+
+    assert PERSISTED_QUERY_DEAD in FINAL_CODES
+    assert PERSISTED_QUERY_DEAD not in BACKEND_PAUSE_SECONDS
+
+
+def test_persisted_query_dead_envelope_is_ok_false_with_hint():
+    from agent_reach.runtime.result import envelope
+
+    out = envelope(channel="facebook", action="post",
+                   error=ReachError(PERSISTED_QUERY_DEAD, "document not found"))
+    assert out["ok"] is False
+    assert out["error"]["code"] == PERSISTED_QUERY_DEAD
+    assert out["error"]["hint"]
 
 
 def test_login_shaped_graphql_error_maps_to_need_login(harness):

@@ -89,7 +89,8 @@ def test_868_read_action_falls_back_to_public_read(monkeypatch):
     assert out["ok"] and out["backend"] == "public-web"
 
 
-@pytest.mark.parametrize("code", ["NEED_LOGIN", "RATE_LIMITED", "NOT_FOUND", "PLATFORM_BLOCKED"])
+@pytest.mark.parametrize("code", ["NEED_LOGIN", "RATE_LIMITED", "NOT_FOUND", "PLATFORM_BLOCKED",
+                                  "PERSISTED_QUERY_DEAD"])
 def test_868_final_codes_never_fall_back(monkeypatch, code):
     _added_reddit()
 

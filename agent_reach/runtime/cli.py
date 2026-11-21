@@ -60,6 +60,7 @@ For the user:
   agent-reach remove <channel>            remove a channel (defaults too) and what only it used
   agent-reach login|logout <channel>      log in (the user does it) / forget the login
   agent-reach browser setup|status|stop   headless shared browser; login opens a window
+  agent-reach farm account add|list       multi-account farm registry (env, ledger later)
   agent-reach browser profiles|use ID    choose an existing local login source
   agent-reach skill [link|unlink <dir>]   where the agent skill is; link it for another AI, or unlink one for good
   agent-reach doctor [--text]             status of every channel and installed tool versions (no network)
@@ -553,6 +554,32 @@ def _cmd_browser(args: Sequence[str]) -> int:
         return _bad_input(None, "browser", str(exc))
 
 
+def _cmd_farm(args: Sequence[str]) -> int:
+    from . import farm
+
+    parser = _Parser(prog="farm", add_help=False)
+    parser.add_argument("op", choices=("account", "env", "ledger"))
+    parser.add_argument("sub", nargs="?")
+    parser.add_argument("name", nargs="?")
+    parser.add_argument("--proxy", default=None)
+    try:
+        ns = parser.parse_args(list(args))
+    except _ArgError as exc:
+        return _bad_input(None, "farm", str(exc))
+    if ns.op != "account":
+        return _bad_input(None, f"farm {ns.op}", f"farm {ns.op} is not implemented yet")
+    if ns.sub == "add":
+        if not ns.name or not ns.proxy:
+            return _bad_input(None, "farm account add",
+                              "usage: agent-reach farm account add <name> --proxy <url>")
+        return _mgmt("farm account add", farm.add_account, ns.name, ns.proxy)
+    if ns.sub == "list":
+        if ns.name or ns.proxy:
+            return _bad_input(None, "farm account list", "usage: agent-reach farm account list")
+        return _mgmt("farm account list", lambda: {"accounts": farm.list_accounts()})
+    return _bad_input(None, "farm account", "valid ops: add <name> --proxy <url>, list")
+
+
 def main(argv: Sequence[str]) -> int:
     global _SHOW_NOTICE
 
@@ -577,6 +604,8 @@ def main(argv: Sequence[str]) -> int:
         return _cmd_logout(rest)
     if head == "browser":
         return _cmd_browser(rest)
+    if head == "farm":
+        return _cmd_farm(rest)
     if head == "doctor":
         return _cmd_doctor(rest)
     if head == "skill":

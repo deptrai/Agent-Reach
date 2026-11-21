@@ -1,0 +1,16 @@
+# Dockerfile-specific ignore for farm/container/Dockerfile (build context = repo root).
+.git
+_bmad
+_bmad-output
+.agents
+.claude
+tests
+docs
+node_modules
+**/__pycache__
+**/*.pyc
+.venv
+venv
+farm/container/accounts
+*.log
+.DS_Store

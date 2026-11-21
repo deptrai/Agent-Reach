@@ -35,6 +35,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Farm containers: ShardBrowser vendor (story 14.2 / spike 14.1 verdict).
+# Pinned — upgrades ship as a new image build (C7), never a runtime update.
+farm = [
+    "shardx==2.1.7",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.8",

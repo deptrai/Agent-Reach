@@ -332,6 +332,14 @@ def ensure_chrome(*, retry_cloak: bool = False) -> str:
     selected = chrome_binary()
     if selected and _load_state().get("backend") and not retry_cloak:
         return selected
+    if os.environ.get("REACH_BROWSER_BACKEND") == "shard":
+        # Farm containers pin ShardBrowser (spike 14.1); no host auto-install path.
+        from agent_reach.backends import shard
+
+        installed = shard.setup()
+        update_state(backend="shardbrowser", executable=installed["executable"],
+                     launcher_python=installed["python"], fallback_reason=None)
+        return installed["executable"]
     from agent_reach.backends import cloak
     try:
         installed = cloak.setup()
@@ -495,14 +503,18 @@ def _launch(url: str, *, headless: bool = True) -> None:
             refresh_extension()  # offline: open without it; the OpenCLI wait reports the problem
     # A watcher still exiting from the last browser holds its lock for a moment; the new one waits for it.
     with open(watcher_log_path(), "wb") as log:
+        backend = _load_state().get("backend")
         proc = subprocess.Popen(
             [_load_state().get("launcher_python") or sys.executable, "-m", "agent_reach.runtime.browser_watcher",
-             "--launch", url, "--chrome", exe, *(["--cloak"] if _load_state().get("backend") == "cloakbrowser" else []),
+             "--launch", url, "--chrome", exe,
+             *(["--cloak"] if backend == "cloakbrowser" else ["--shard"] if backend == "shardbrowser" else []),
              *([] if headless else ["--headed"])],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[2]),
                  "CLOAKBROWSER_AUTO_UPDATE": "false",
-                 "REACH_BROWSER_PROXY": str(Config(read_only=True).get("proxy") or ""),
+                 # Per-container env (farm) wins over the global configured proxy.
+                 "REACH_BROWSER_PROXY": os.environ.get("REACH_BROWSER_PROXY")
+                     or str(Config(read_only=True).get("proxy") or ""),
                  "REACH_BROWSER_PORT": str(CDP_PORT),
                  "CLOAKBROWSER_CACHE_DIR": str(browser_root().parent / "cloak-binaries")}, **_detach_kwargs(),
         )

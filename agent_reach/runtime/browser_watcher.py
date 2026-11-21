@@ -96,12 +96,25 @@ def _launch_cloak(url: str, *, headless: bool = True):
     return ctx
 
 
+def _launch_shard(url: str, *, headless: bool = True):
+    """ShardBrowser launch (farm containers); the BrowserSession replaces `ctx`."""
+    from agent_reach.backends import shard
+
+    return shard.launch(url, headless=headless,
+                        proxy=os.environ.get("REACH_BROWSER_PROXY") or None,
+                        cdp_port=browser.CDP_PORT,
+                        extension_dir=browser.extension_dir(),
+                        profile_dir=browser.profile_dir(),
+                        template=os.environ.get("REACH_BROWSER_PROFILE") or None)
+
+
 def watch(idle: Optional[float] = None, poll: float = 2.0, *, launch: Optional[str] = None,
-          chrome: Optional[str] = None, cloak: bool = False, headless: bool = True) -> str:
+          chrome: Optional[str] = None, cloak: bool = False, shard: bool = False,
+          headless: bool = True) -> str:
     """Run until the browser is gone. Returns why it stopped."""
     idle = browser.IDLE_LIMIT if idle is None else idle
     fd = browser._open_lock(browser.watcher_lock_path())
-    proc = conn = ctx = bridge_proc = None
+    proc = conn = ctx = shard_sess = bridge_proc = None
     try:
         # A probe (watcher_running) holds the lock for an instant; a live watcher holds it for good.
         # A watcher of a browser that just closed may still be on its way out: give it a moment.
@@ -111,13 +124,15 @@ def watch(idle: Optional[float] = None, poll: float = 2.0, *, launch: Optional[s
         if launch is not None:
             if browser.is_running():
                 return "a browser is already using the debugging port"
-            if cloak:
+            if shard:
+                shard_sess = _launch_shard(launch, headless=headless)
+            elif cloak:
                 ctx = _launch_cloak(launch, headless=headless)
             else:
                 proc, conn = _launch_with_pipe(chrome or browser.ensure_chrome(), "about:blank", headless=headless)
                 _load_extension(conn)
-            browser.update_state(running_backend="cloakbrowser" if cloak else "chrome",
-                                 profile_backend="cloakbrowser" if cloak else "chrome", headless=headless)
+            engine = "shardbrowser" if shard else ("cloakbrowser" if cloak else "chrome")
+            browser.update_state(running_backend=engine, profile_backend=engine, headless=headless)
             browser.restore_session()
             if launch != "about:blank":
                 if ctx is not None:
@@ -164,6 +179,11 @@ def watch(idle: Optional[float] = None, poll: float = 2.0, *, launch: Optional[s
         if ctx is not None:
             with contextlib.suppress(Exception):
                 ctx.close()
+        if shard_sess is not None:
+            from agent_reach.backends import shard as _shard
+
+            with contextlib.suppress(Exception):
+                _shard.close_session(shard_sess)
         if conn is not None:
             conn.close()  # Chrome exits when its pipe closes
         if proc is not None:
@@ -183,9 +203,11 @@ def main() -> None:
     parser.add_argument("--launch", default=None, help="start Chrome with this URL and own it (macOS/Linux)")
     parser.add_argument("--chrome", default=None, help="Chrome binary for --launch")
     parser.add_argument("--cloak", action="store_true", help="use CloakBrowser's public launcher")
+    parser.add_argument("--shard", action="store_true", help="use ShardBrowser's SDK launcher (farm containers)")
     parser.add_argument("--headed", action="store_true", help="show a window for human login")
     ns = parser.parse_args()
-    reason = watch(ns.idle, launch=ns.launch, chrome=ns.chrome, cloak=ns.cloak, headless=not ns.headed)
+    reason = watch(ns.idle, launch=ns.launch, chrome=ns.chrome, cloak=ns.cloak, shard=ns.shard,
+                   headless=not ns.headed)
     print(reason, file=sys.stderr, flush=True)
     sys.exit(0 if reason in ("browser closed", "closed after idle") else 1)
 

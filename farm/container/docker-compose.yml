@@ -1,0 +1,33 @@
+# Farm container — 1 account : 1 container (story 14.2).
+# Per-account instantiate (project name isolates the named volume):
+#   cp .env.example accounts/<account>.env   # fill REACH_ACCOUNT / REACH_BROWSER_PROXY
+#   docker compose -p farm-<account> --env-file accounts/<account>.env up -d
+#   → container `farm-<account>`, volume `farm-<account>_home`
+
+services:
+  account:
+    build:
+      context: ../..                      # repo root: agent-reach installs from source
+      dockerfile: farm/container/Dockerfile
+      args:
+        AGENT_REACH_SOURCE_SHA: ${AGENT_REACH_SOURCE_SHA:-unknown}
+    image: agent-reach-farm:1.6.1
+    platform: linux/amd64                 # shardx ships linux-x64 only; farm host is x86_64
+    container_name: farm-${REACH_ACCOUNT:?REACH_ACCOUNT is required}
+    init: true                            # reap chromium helper zombies
+    restart: unless-stopped
+    mem_limit: 1536m                      # ~1.5GB cap per account — docker stats enforces
+    environment:
+      REACH_ACCOUNT: ${REACH_ACCOUNT:?REACH_ACCOUNT is required}
+      REACH_BROWSER_PROXY: ${REACH_BROWSER_PROXY:?REACH_BROWSER_PROXY is required}
+      REACH_BROWSER_PROFILE: ${REACH_BROWSER_PROFILE:-linux-desktop-chrome}
+      FARM_BOOT_CHECK: ${FARM_BOOT_CHECK:-1}
+    volumes:
+      - home:/home/farm/.agent-reach      # per-account HOME slice (named volume)
+    stop_grace_period: 30s                # let the watcher save session cookies
+    # Story 14.3 swaps this default bridge for a dedicated netns + hard egress
+    # kill-switch (zero route except proxy_i). Deliberately unchanged here —
+    # bridge 127.0.0.1:19825 already lives inside this container's netns.
+
+volumes:
+  home: {}

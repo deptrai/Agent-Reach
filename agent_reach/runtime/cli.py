@@ -654,7 +654,7 @@ def _cmd_fleet(args: Sequence[str]) -> int:
     parser.add_argument("--interval", type=float, default=None)
     try:
         ns = parser.parse_args(list(args))
-    except _ParseExit as exc:
+    except _ArgError as exc:
         return _bad_input(None, "fleet", str(exc))
     if ns.op == "list":
         if ns.name or ns.channel or ns.once or ns.interval is not None:

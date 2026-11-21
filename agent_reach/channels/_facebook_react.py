@@ -127,6 +127,10 @@ p.set("doc_id",__FB_DOC);
 p.set("server_timestamps","true");
 p.set("variables",JSON.stringify(vars));
 const KEY=__FB_KEY;
+// Sent sentinel: a retried eval after a transport timeout must not re-fire
+// the mutation — return early; the poll picks up the in-flight result.
+if(window[KEY+"_sent"])return{sent:true,dup:true};
+window[KEY+"_sent"]=true;
 window[KEY]=null;
 fetch("/api/graphql/",{method:"POST",credentials:"include",
 headers:{"Content-Type":"application/x-www-form-urlencoded","X-FB-Friendly-Name":__FB_FRIENDLY},
@@ -195,19 +199,42 @@ def _ensure_post_loaded(target_id: str, url: str, timeout: float) -> None:
     _wait_ready(target_id, max(1.0, deadline - time.monotonic()))
 
 
+def _post_id_of(url: str) -> str | None:
+    """Extract the numeric post id from a post URL — `/posts/<id>` path or
+    `permalink.php?story_fbid=<id>` query. ASCII digits only."""
+    try:
+        parts = urllib.parse.urlparse(url or "")
+    except (TypeError, ValueError):
+        return None
+    m = re.search(r"/posts/([0-9]+)", parts.path or "")
+    if m:
+        return m.group(1)
+    fbid = (urllib.parse.parse_qs(parts.query).get("story_fbid") or [None])[0]
+    if fbid and re.fullmatch(r"[0-9]+", str(fbid)):
+        return str(fbid)
+    return None
+
+
 def _same_post_path(href: str, url: str) -> bool:
     """True when `href` already shows the same post AND the same comment.
 
     Path alone is not enough: a comment permalink shares the post's path, so
     a comment_id mismatch must trigger navigation (otherwise the comment is
-    never loaded and the reaction would land on the post)."""
+    never loaded and the reaction would land on the post). The comparison
+    uses the resolved post identity, not the raw path: Facebook 302-redirects
+    `permalink.php?story_fbid=N` to the canonical `/<uid>/posts/N`, so a
+    path-only compare would never match and every write action on a
+    `facebook post`-style URL would loop to UPSTREAM_BROKEN."""
     a = urllib.parse.urlparse(href or "")
     b = urllib.parse.urlparse(url)
-    if not a.netloc or a.path.rstrip("/") != b.path.rstrip("/"):
-        return False
     cid_a = urllib.parse.parse_qs(a.query).get("comment_id", [None])[0]
     cid_b = urllib.parse.parse_qs(b.query).get("comment_id", [None])[0]
-    return cid_a == cid_b
+    if cid_a != cid_b:
+        return False
+    if a.netloc and a.path.rstrip("/") == b.path.rstrip("/"):
+        return True
+    pa, pb = _post_id_of(href), _post_id_of(url)
+    return bool(pa and pb and pa == pb)
 
 
 def _resolve_feedback_id(target_id: str, url: str, timeout: float) -> str:

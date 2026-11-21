@@ -4,6 +4,8 @@
 import json
 import sqlite3
 import stat
+from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -83,6 +85,9 @@ def test_bad_proxy_rejected_before_any_fs(capsys, proxy):
     ["farm", "account", "add", "noname"],
     ["farm", "account", "add", "a", "b", "--proxy", "http://p:1"],
     ["farm", "account", "list", "extra"],
+    ["farm", "account", "env"],
+    ["farm", "account", "env", "a", "b"],
+    ["farm", "account", "env", "a", "--proxy", "http://p:1"],
     ["farm", "account"],
     ["farm", "bogus"],
     ["farm"],
@@ -94,10 +99,66 @@ def test_missing_or_unknown_args_are_bad_input(capsys, argv):
 
 
 @pytest.mark.parametrize("op", ["env", "ledger"])
-def test_env_and_ledger_not_implemented(capsys, op):
+def test_top_level_env_and_ledger_still_stubbed(capsys, op):
     code, out = _run(capsys, ["farm", op])
     assert code == 1
     assert out["error"]["code"] == "BAD_INPUT"
+
+
+def test_env_registered_account(capsys):
+    farm.add_account("a1", "http://p1:8080")
+    code, out = _run(capsys, ["farm", "account", "env", "a1"])
+    assert code == 0
+    assert out["action"] == "farm account env"
+    env = out["result"]
+    home = state.root() / "farm" / "accounts" / "a1"
+    assert env == {
+        "HOME": str(home),
+        "REACH_BROWSER_PROXY": "http://p1:8080",
+        "REACH_ACCOUNT": "a1",
+    }
+    assert Path(env["HOME"]).is_absolute()
+
+
+def test_env_two_accounts_resolve_distinct_values(capsys):
+    farm.add_account("a1", "http://p1:8080")
+    farm.add_account("a2", "socks5://p2:1080")
+    _, out1 = _run(capsys, ["farm", "account", "env", "a1"])
+    _, out2 = _run(capsys, ["farm", "account", "env", "a2"])
+    env1, env2 = out1["result"], out2["result"]
+    assert env1["HOME"] != env2["HOME"]
+    assert env1["HOME"] == str(state.root() / "farm" / "accounts" / "a1")
+    assert env2["HOME"] == str(state.root() / "farm" / "accounts" / "a2")
+    assert env1["REACH_BROWSER_PROXY"] == "http://p1:8080"
+    assert env2["REACH_BROWSER_PROXY"] == "socks5://p2:1080"
+    assert env1["REACH_ACCOUNT"] == "a1"
+    assert env2["REACH_ACCOUNT"] == "a2"
+
+
+def test_env_unknown_account_is_need_setup(capsys):
+    code, out = _run(capsys, ["farm", "account", "env", "ghost"])
+    assert code == 1
+    assert out["ok"] is False
+    assert out["error"]["code"] == "NEED_SETUP"
+
+
+@pytest.mark.parametrize("name", ["../x", "has space", "a/b"])
+def test_env_bad_name_is_bad_input(capsys, name):
+    code, out = _run(capsys, ["farm", "account", "env", name])
+    assert code == 1
+    assert out["error"]["code"] == "BAD_INPUT"
+
+
+def test_env_row_without_proxy_omits_proxy_var(capsys):
+    farm.add_account("noproxy", "http://p:1")
+    with closing(farm.connect()) as conn, conn:
+        conn.execute("UPDATE accounts SET proxy = '' WHERE name = 'noproxy'")
+    code, out = _run(capsys, ["farm", "account", "env", "noproxy"])
+    assert code == 0
+    env = out["result"]
+    assert "REACH_BROWSER_PROXY" not in env
+    assert env["REACH_ACCOUNT"] == "noproxy"
+    assert Path(env["HOME"]).is_absolute()
 
 
 def test_dirs_are_private_0700():

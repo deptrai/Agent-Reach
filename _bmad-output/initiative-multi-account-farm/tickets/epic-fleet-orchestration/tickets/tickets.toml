@@ -1,0 +1,78 @@
+# Tickets for epic-fleet-orchestration — container-per-account + fleet manager (R8–R11)
+[[entry]]
+id = 1
+type = "spike"
+title = "Browser vendor + proxy path verify"
+description = """
+Spike: chốt vendor C2 giữa CloakBrowser (upstream-tested, free key 1 profile) và ShardBrowser (MIT, `ProxyShard/ShardBrowser`, SDK `shardx`, engine-level fingerprint). Live-verified phần còn mở: proxy thật qua `proxy=` param (QUIC/WebRTC path), load extension OpenCLI + connect daemon :19825 qua `extra_args`, cố định CDP port bằng `--remote-debugging-port`, soak ngắn trên X thật. Nếu chưa có proxy test → dùng proxy local giả lập (http://127.0.0.1:PORT) để verify wiring, đánh dấu phần cần proxy thật là pending.
+"""
+verify = "Verdict vendor + evidence proxy path (request đi qua proxy thật hoặc pending rõ ràng); quyết định ghi vào plan file làm input cho 14.2."
+covers = ["R8"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Container template — 1 account 1 container"
+description = """
+Dockerfile/compose template: image chứa agent-reach + opencli + browser vendor (theo verdict 14.1) PIN VERSION tại build time (C7 — upgrade = rebuild, không auto-update); HOME riêng, mount `~/.agent-reach` volume riêng per account, proxy env per container (REACH_BROWSER_PROXY), resource cap ~1.5GB RAM. Trong container: `agent-reach check` JSON chạy được, browser dedicated launch được, `x post` chạy được (test account). Bridge `127.0.0.1:19825` nằm TRONG netns của container — không đụng host.
+"""
+verify = "docker run template → `agent-reach check` trả JSON hợp lệ từ trong container; `x post` (dry/test account) thành công; RAM cap enforce được (docker stats)."
+covers = ["R8"]
+after = [1]
+hitl = false
+risk = "high"
+
+[[entry]]
+id = 3
+type = "story"
+title = "netns hard-enforce kill-switch (zero egress ngoài proxy)"
+description = """
+Bake contract kill-switch của epic 11 vào network: mỗi container trong netns riêng, route mặc định chỉ tới proxy_i — iptables/policy routing trong container chặn mọi egress trực tiếp ra WAN (drop rules cho non-proxy destinations). Proxy chết → container mất hoàn toàn route ra ngoài (không chờ dispatch check của 13.2 — đây là layer hard). Verify bằng cách kill proxy trong container rồi curl ra ngoài → phải fail 100%, kể cả DNS leak cũng phải đi qua proxy hoặc bị chặn. Không đổi port/config bridge trong code.
+"""
+verify = "Container lên + proxy chạy → egress OK qua proxy; kill proxy → mọi curl/direct-connect ra WAN fail (không còn route); direct-IP test (curl --noproxy) cũng fail."
+covers = ["R8"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Fleet manager — health poll + registry populate + NEED_LOGIN reopen"
+description = """
+Fleet manager (script/CLI `agent-reach fleet ...` hoặc daemon tối giản): poll `agent-reach check` JSON trong mỗi container theo cadence → populate runtime fields của registry epic-11 (container_id ↔ account ↔ proxy ↔ session_state ↔ ban_status); account trả NEED_LOGIN → tạo job mở login window đúng container đó (dùng onboarding.py login flow designed-for-agent + browser_watcher) và ghi trạng thái chờ operator. Health view 1 chỗ: container nào đỏ, vì sao (session/ban/proxy/down).
+"""
+verify = "2 container chạy → fleet list hiện health đúng per container; giả lập session chết → entry đổi NEED_LOGIN + login window mở trong đúng container đó."
+covers = ["R9", "R10"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Farm metrics tối giản per-account"
+description = """
+Đọc actions_log của registry (epic-11.5) + health của fleet manager → output có cấu trúc (JSON file hoặc `agent-reach farm metrics`) gồm: actions/ngày per account per action_class, đếm RATE_LIMITED, PLATFORM_BLOCKED, ban/suspension flags, uptime container. Không build dashboard — chỉ cần sink đọc được cho operator.
+"""
+verify = "Sau vài action trên ≥2 account → `farm metrics` trả JSON đủ fields: actions/day, rate_limited, platform_blocked, ban flags, per account."
+covers = ["R11"]
+after = [4]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Scale e2e ≥4 container + runbook nhân bản + docs sweep"
+description = """
+Gate scale thật: ≥4 container chạy song song trên 1 host không đụng bridge :19825 / proxy / session của nhau (mỗi cái netns riêng) — verify bằng fleet health + 1 write trên ≥2 container đồng thời. Runbook `docs/farm-scale-runbook.md`: nhân bản 2→N step-by-step (tạo account → registry add → volume → proxy → container up → login window → verify). Ghi rõ cap ≤20 account tới khi epic-farm-resilience live (no fallback/no monitor → không scale qua). Sweep docs + suite xanh.
+"""
+verify = "4 container đồng thời healthy + writes song song không lẫn session/proxy; runbook walk-through được trên host này; suite xanh."
+covers = ["R8", "R9"]
+after = [3, 4, 5]
+hitl = true
+risk = "medium"

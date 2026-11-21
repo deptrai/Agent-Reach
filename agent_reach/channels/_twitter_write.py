@@ -378,13 +378,15 @@ def twitter_thread(*, texts: list, timeout: float) -> list:
                 key_prefix="__xReplyResult" if reply_to else "__xPostResult",
             )
         except ReachError as exc:
-            raise ReachError(
+            err = ReachError(
                 exc.code,
                 f"thread stopped at tweet {i}/{len(texts)}"
                 + _thread_posted_suffix(items)
                 + f": {exc.message}",
                 hint=exc.hint,
-            ) from exc
+            )
+            err.posted = len(items)  # tweets that already landed; the cap must count them
+            raise err from exc
         reply_to = posted[0]["raw"]["tweetId"] or _tweet_id(posted[0]["url"])
         items.extend(posted)
     return items

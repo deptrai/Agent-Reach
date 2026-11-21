@@ -367,3 +367,128 @@ def ledger_24h(account: str) -> dict:
         "attempts": attempts,
         "by_class": by_class,
     }
+
+
+# In-flight holds older than this no longer count: the process that reserved
+# them is gone, and a stuck row must not freeze the cap forever.
+_RESERVE_TTL = 900
+
+
+class QuotaFull(Exception):
+    """reserve_slots refused: `count` already-used slots vs `cap`."""
+
+    def __init__(self, count: int, cap: int):
+        self.count = count
+        self.cap = cap
+
+
+def reserve_slots(account: str, action_class: str, slots: int, cap: int) -> list:
+    """Atomically hold `slots` ledger rows or raise QuotaFull.
+
+    One BEGIN IMMEDIATE transaction counts 24h successes plus fresh `reserved`
+    rows and inserts the holds. Two processes racing a cap of 1 cannot both
+    pass: the second waits on the write lock and then sees the first hold.
+    """
+    _validate_name(account)
+    slots = int(slots)
+    if slots < 1:
+        raise ReachError(BAD_INPUT, "reserve slots must be >= 1")
+    cap = int(cap)
+
+    def _tx() -> list:
+        with closing(connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_account(conn, account)
+                now = int(time.time())
+                row = conn.execute(
+                    "SELECT "
+                    "SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN outcome = 'reserved' AND ts >= ? THEN 1 ELSE 0 END) "
+                    "FROM actions_log WHERE account = ? AND action_class = ? AND ts >= ?",
+                    (now - _RESERVE_TTL, account, action_class, now - 86400),
+                ).fetchone()
+                used = int(row[0] or 0) + int(row[1] or 0)
+                if cap <= 0 or used + slots > cap:
+                    conn.rollback()
+                    raise QuotaFull(used, cap)
+                ids = []
+                for _ in range(slots):
+                    cur = conn.execute(
+                        "INSERT INTO actions_log (account, ts, action_class, outcome) "
+                        "VALUES (?, ?, ?, 'reserved')",
+                        (account, now, action_class),
+                    )
+                    ids.append(cur.lastrowid)
+                conn.commit()
+                return ids
+            except QuotaFull:
+                raise
+            except Exception:
+                conn.rollback()
+                raise
+
+    return _with_busy_retry(_tx, "quota reserve")
+
+
+def settle_slots(rowids, *, successes: int, failure: Optional[str] = None) -> None:
+    """Turn holds into real ledger rows: `successes` become success, one row
+    records `failure` when set, leftover holds are deleted (they never posted)."""
+    rowids = [r for r in (rowids or [])]
+    successes = max(0, int(successes))
+    if not rowids and successes <= 0 and not failure:
+        return
+
+    def _tx() -> None:
+        with closing(connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                i = 0
+                for _ in range(min(successes, len(rowids))):
+                    conn.execute(
+                        "UPDATE actions_log SET outcome = 'success' WHERE rowid = ?",
+                        (rowids[i],),
+                    )
+                    i += 1
+                if failure and i < len(rowids):
+                    conn.execute(
+                        "UPDATE actions_log SET outcome = ? WHERE rowid = ?",
+                        (failure, rowids[i]),
+                    )
+                    i += 1
+                elif failure and rowids:
+                    src = conn.execute(
+                        "SELECT account, action_class FROM actions_log WHERE rowid = ?",
+                        (rowids[0],),
+                    ).fetchone()
+                    if src:
+                        conn.execute(
+                            "INSERT INTO actions_log (account, ts, action_class, outcome) "
+                            "VALUES (?, ?, ?, ?)",
+                            (src[0], int(time.time()), src[1], failure),
+                        )
+                for rid in rowids[i:]:
+                    conn.execute(
+                        "DELETE FROM actions_log WHERE rowid = ? AND outcome = 'reserved'",
+                        (rid,),
+                    )
+                extra = successes - min(successes, len(rowids))
+                if extra and rowids:
+                    src = conn.execute(
+                        "SELECT account, action_class FROM actions_log WHERE rowid = ?",
+                        (rowids[0],),
+                    ).fetchone()
+                    if src:
+                        now = int(time.time())
+                        for _ in range(extra):
+                            conn.execute(
+                                "INSERT INTO actions_log (account, ts, action_class, outcome) "
+                                "VALUES (?, ?, ?, 'success')",
+                                (src[0], now, src[1]),
+                            )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    _with_busy_retry(_tx, "quota settle")

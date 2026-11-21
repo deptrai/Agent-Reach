@@ -7,6 +7,7 @@ legacy path, and unlimited classes are untouched; a refusal writes no ledger row
 """
 
 import os
+import threading
 import time
 from contextlib import closing
 
@@ -191,3 +192,26 @@ def test_ledger_reach_error_surfaces_unchanged(monkeypatch):
     assert out["error"]["code"] == "NEED_SETUP"
     assert os.environ["REACH_ACCOUNT"] == "a1"
     assert _rows("a1") == 0
+
+
+def test_reserve_is_atomic_across_threads():
+    """Eight racers, cap 1: exactly one hold lands. The rest see QuotaFull."""
+    farm.add_account("a1", "http://p1:8080")
+    barrier = threading.Barrier(8)
+    results = []
+
+    def once():
+        barrier.wait()
+        try:
+            farm.reserve_slots("a1", "post", 1, 1)
+            results.append("ok")
+        except farm.QuotaFull:
+            results.append("full")
+
+    threads = [threading.Thread(target=once) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results.count("ok") == 1
+    assert results.count("full") == 7

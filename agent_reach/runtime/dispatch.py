@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
 import socket
 import threading
@@ -524,7 +525,27 @@ def _enforce_proxy_kill_switch() -> None:
     _PROXY_VERDICTS[proxy] = (True, now + ttl)
 
 
-def _enforce_write_quota(channel_name: str, action_name: str) -> None:
+# Stack of reserved ledger rowids, one frame per run_action. A nested
+# run_action (public-web fallback) pushes and pops its own holds.
+_QUOTA_HOLD: contextvars.ContextVar = contextvars.ContextVar("reach_quota_hold", default=None)
+
+
+def _push_hold(ids: list) -> None:
+    stack = list(_QUOTA_HOLD.get() or [])
+    stack.append(list(ids))
+    _QUOTA_HOLD.set(stack)
+
+
+def _pop_hold(depth: int):
+    stack = list(_QUOTA_HOLD.get() or [])
+    if len(stack) <= depth:
+        return None
+    hold = stack.pop()
+    _QUOTA_HOLD.set(stack)
+    return hold
+
+
+def _enforce_write_quota(channel_name: str, action_name: str, slots: int = 1) -> None:
     """Refuse a write whose 24h success count has reached the cap.
 
     No-op for reads, verbs outside WRITE_ACTIONS, the legacy path (no
@@ -548,21 +569,23 @@ def _enforce_write_quota(channel_name: str, action_name: str) -> None:
     try:
         from . import farm
 
-        snap = farm.ledger_24h(account)
+        farm.ledger_24h(account)  # unreadable ledger fails closed; tests hook this
         age_days = _account_age_days(account, farm) if cap > 0 else None
     except ReachError:
         raise
     except Exception as exc:  # noqa: BLE001 - any ledger failure blocks the write
         raise ReachError(UPSTREAM_BROKEN, f"quota check failed for account {account}: {exc}") from exc
-    by_class = snap.get("by_class") or {}
-    count = int((by_class.get(action_name) or {}).get("success") or 0)
     effective = cap
     ramp = 1.0
     if cap > 0:
         ramp = _ramp_factor(age_days, _ramp_schedule())
         if ramp < 1.0:
             effective = max(1, int(cap * ramp))
-    if count >= effective:
+    # The reserve is the real gate: check + insert in one IMMEDIATE transaction,
+    # so two processes cannot both slip through a cap of 1.
+    try:
+        ids = farm.reserve_slots(account, action_name, slots, effective)
+    except farm.QuotaFull as full:
         detail = (
             f"cap {cap} x ramp {ramp:g} (account age {age_days}d) = {effective}"
             if ramp < 1.0
@@ -571,8 +594,13 @@ def _enforce_write_quota(channel_name: str, action_name: str) -> None:
         raise ReachError(
             QUOTA_EXCEEDED,
             f"quota cap exceeded for account {account} action_class {action_name}: "
-            f"{count} success in 24h ({detail})",
-        )
+            f"{full.count} success in 24h ({detail})",
+        ) from None
+    except ReachError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a reserve that cannot run blocks the write
+        raise ReachError(UPSTREAM_BROKEN, f"quota check failed for account {account}: {exc}") from exc
+    _push_hold(ids)
 
 
 def _schema_error(err: ReachError) -> bool:
@@ -604,7 +632,7 @@ def _xactions_fallback(channel_name, action_name, clean, errors, clock):
         return None, ReachError(UPSTREAM_BROKEN, f"xactions fallback failed: {exc}")
 
 
-def _record_farm_write(channel_name: str, action_name: str, result: dict) -> None:
+def _record_farm_write(channel_name: str, action_name: str, result: dict, hold=None) -> None:
     """Append one `actions_log` row for a write run under REACH_ACCOUNT.
 
     Reads the selector from the (restored) env: a nested run_action inside an
@@ -624,14 +652,26 @@ def _record_farm_write(channel_name: str, action_name: str, result: dict) -> Non
     # attempt, whatever its code (over cap, unreadable ledger, bad cap).
     if (result.get("meta") or {}).get("quota_refused"):
         return
-    # A thread posts N tweets in one run — count each posted item, or the cap
-    # under-counts live tweets (a 3-tweet thread is 3 posts, not 1).
+    # Tweets that landed before a thread leg failed. The error envelope carries
+    # the count; they count toward the cap even though the run itself failed.
+    posted = int((result.get("meta") or {}).get("posted") or 0)
     n = 1
     if outcome == "success" and action_name == "thread":
         n = max(1, len(result.get("items") or []))
     try:
         from . import farm
 
+        if hold:
+            if outcome == "success":
+                farm.settle_slots(hold, successes=n)
+            else:
+                farm.settle_slots(hold, successes=posted, failure=outcome)
+            return
+        if action_name == "thread" and posted and outcome != "success":
+            for _ in range(posted):
+                farm.record_action(account, action_name, "success")
+            farm.record_action(account, action_name, outcome)
+            return
         for _ in range(n):
             farm.record_action(account, action_name, outcome)
     except Exception:  # noqa: BLE001 - ledger writes must never break the action
@@ -652,11 +692,19 @@ def run_action(
     the farm ledger (after fallback attempts); the recording never changes
     the returned result.
     """
-    result = _run_action(
-        channel, action_name, params, timeout=timeout, only_backend=only_backend
-    )
-    _record_farm_write(channel.name, action_name, result)
-    return result
+    depth = len(_QUOTA_HOLD.get() or [])
+    try:
+        result = _run_action(
+            channel, action_name, params, timeout=timeout, only_backend=only_backend
+        )
+        _record_farm_write(
+            channel.name, action_name, result, hold=_pop_hold(depth)
+        )
+        return result
+    finally:
+        stack = list(_QUOTA_HOLD.get() or [])
+        if len(stack) > depth:
+            _QUOTA_HOLD.set(stack[:depth])
 
 
 def _run_action(
@@ -702,7 +750,12 @@ def _run_action(
         # record seam to skip.
         try:
             _enforce_proxy_kill_switch()
-            _enforce_write_quota(channel.name, action_name)
+            slots = 1
+            if action_name == "thread":
+                texts = clean.get("texts")
+                if isinstance(texts, (list, tuple)):
+                    slots = max(1, len(texts))
+            _enforce_write_quota(channel.name, action_name, slots=slots)
         except ReachError as gate_error:
             out = envelope(channel=channel.name, action=action_name,
                            elapsed_ms=elapsed(), error=gate_error)
@@ -813,10 +866,14 @@ def _run_action(
     errors = errors or cached_errors
     final = next((e for e in errors if e.code in FINAL_CODES), None)
     err = final or (_pick_error(errors) if errors else ReachError(BAD_INPUT, f"no backend named '{only_backend}'"))
-    return envelope(
+    out = envelope(
         channel=channel.name,
         action=action_name,
         elapsed_ms=elapsed(),
         attempts=attempts,
         error=err,
     )
+    posted = int(getattr(err, "posted", 0) or 0)
+    if posted:
+        out["meta"]["posted"] = posted
+    return out

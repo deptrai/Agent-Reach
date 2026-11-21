@@ -47,11 +47,14 @@ names the platform, the operation and both ids. Sink failures are reported in
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import random
+import socket
 import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -242,14 +245,63 @@ def _send_file(alerts: Sequence[str], cfg: Mapping[str, Any]) -> list[str]:
         return [f"file sink failed: {exc}"]
 
 
+def _blocked_webhook_ip(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return True
+    return bool(
+        addr.is_private or addr.is_loopback or addr.is_link_local
+        or addr.is_reserved or addr.is_multicast or addr.is_unspecified
+    )
+
+
+def _assert_webhook_public(url: str) -> None:
+    """Refuse a sink aimed at loopback, link-local or any internal address.
+    An unresolvable name is left for the POST to fail — a typo is not SSRF."""
+    host = (urllib.parse.urlsplit(url).hostname or "").strip("[]")
+    if not host:
+        raise ReachError(BAD_INPUT, "webhook URL has no host")
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _blocked_webhook_ip(str(literal)):
+            raise ReachError(BAD_INPUT, f"webhook host {host} is not a public address")
+        return
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return
+    for info in infos:
+        if _blocked_webhook_ip(info[4][0]):
+            raise ReachError(
+                BAD_INPUT, f"webhook host {host} resolves to a non-public address"
+            )
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ReachError(BAD_INPUT, f"webhook redirect refused ({code})")
+
+
+def _webhook_open(request, timeout):
+    return urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout)
+
+
 def _send_webhook(alerts: Sequence[str], cfg: Mapping[str, Any]) -> list[str]:
+    try:
+        _assert_webhook_public(cfg["webhook_url"])
+    except ReachError as exc:
+        return [f"webhook sink failed: {exc}"]
     payload = json.dumps({"alerts": list(alerts)}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         cfg["webhook_url"], data=payload, method="POST",
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=float(cfg["timeout"])) as response:
+        with _webhook_open(request, timeout=float(cfg["timeout"])) as response:
             response.read()
         return []
     except Exception as exc:  # noqa: BLE001 — a dead webhook must not kill the cron

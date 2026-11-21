@@ -144,6 +144,62 @@ def test_need_login_fires_relogin_once_per_transition(monkeypatch):
     assert fleet.get_container("farm-acct1")["pending_login"] == 1
 
 
+def test_every_need_login_channel_gets_a_window(monkeypatch):
+    both = json.dumps({
+        "schema_version": 1, "ok": False, "scope": "all",
+        "results": [
+            {"channel": "twitter", "action": "search", "passed": False,
+             "error": {"code": "NEED_LOGIN", "message": "x"}},
+            {"channel": "reddit", "action": "search", "passed": False,
+             "error": {"code": "NEED_LOGIN", "message": "r"}},
+        ],
+    })
+    calls = _docker_stub(monkeypatch, [_ps_entry("farm-acct1")],
+                         check_stdout=both, check_rc=1)
+    fleet.poll_once()
+    fired = sorted(c[-1] for c in _relogin_calls(calls))
+    assert fired == ["reddit", "twitter"]
+    row = fleet.get_container("farm-acct1")
+    assert row["pending_login"] == 1
+    assert set(row["login_channel"].split(",")) == {"reddit", "twitter"}
+
+    fleet.poll_once()  # both already opened — no third window
+    assert len(_relogin_calls(calls)) == 2
+
+
+def test_restarting_keeps_the_login_latch(monkeypatch):
+    _docker_stub(monkeypatch, [_ps_entry("farm-acct1")],
+                 check_stdout=CHECK_NEED_LOGIN, check_rc=1)
+    fleet.poll_once()
+    assert fleet.get_container("farm-acct1")["pending_login"] == 1
+
+    _docker_stub(monkeypatch, [_ps_entry("farm-acct1", state="restarting")])
+    fleet.poll_once()
+    assert fleet.get_container("farm-acct1")["pending_login"] == 1
+
+
+def test_recreated_container_refires_login(monkeypatch):
+    calls = _docker_stub(monkeypatch, [_ps_entry("farm-acct1")],
+                         check_stdout=CHECK_NEED_LOGIN, check_rc=1)
+    fleet.poll_once()
+    assert len(_relogin_calls(calls)) == 1
+
+    fresh = _ps_entry("farm-acct1")
+    fresh["ID"] = "brand-new-container-id"
+    _docker_stub(monkeypatch, [fresh], check_stdout=CHECK_NEED_LOGIN, check_rc=1)
+    # The stub replacement drops the old call list; count this stub's fires.
+    calls2 = []
+    real = fleet._run
+
+    def wrapped(argv, timeout=None):
+        calls2.append(argv)
+        return real(argv, timeout=timeout)
+
+    monkeypatch.setattr(fleet, "_run", wrapped)
+    fleet.poll_once()
+    assert len(_relogin_calls(calls2)) == 1
+
+
 def test_pending_login_cleared_on_recovery(monkeypatch):
     calls = _docker_stub(monkeypatch, [_ps_entry("farm-acct1")],
                          check_stdout=CHECK_NEED_LOGIN, check_rc=1)

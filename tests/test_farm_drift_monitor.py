@@ -150,7 +150,7 @@ def test_alert_webhook_sink_posts_alerts(xactions_home, monkeypatch):
         seen["timeout"] = timeout
         return _Response()
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(farm_drift, "_webhook_open", fake_urlopen)
 
     report = farm_drift.run_once()
 
@@ -159,6 +159,18 @@ def test_alert_webhook_sink_posts_alerts(xactions_home, monkeypatch):
     assert seen["timeout"] == pytest.approx(farm_drift.DEFAULT_TIMEOUT)
     assert "x/CreateTweet" in json.dumps(seen["body"])
     assert "AAA" in json.dumps(seen["body"]) and "BBB" in json.dumps(seen["body"])
+
+
+def test_webhook_refuses_loopback_and_link_local(xactions_home, monkeypatch):
+    _write_reach({"x": {"CreateTweet": "AAA"}})
+    _write_xactions({"CreateTweet": {"queryId": "BBB"}})
+    monkeypatch.setenv("REACH_DRIFT_SINK", "webhook")
+    for url in ("http://127.0.0.1/hook", "http://169.254.169.254/latest"):
+        monkeypatch.setenv("REACH_DRIFT_WEBHOOK_URL", url)
+        report = farm_drift.run_once()
+        assert report["alerts"], url
+        assert report["sink_errors"], url
+        assert "not a public address" in report["sink_errors"][0]
 
 
 def test_no_drift_means_no_alert_anywhere(xactions_home, tmp_path, monkeypatch):

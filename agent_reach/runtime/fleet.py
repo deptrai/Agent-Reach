@@ -201,8 +201,13 @@ def _check(name: str, timeout: float) -> dict:
         if not r.get("passed") and code:
             codes.setdefault(code, []).append(f"{r.get('channel')}/{r.get('action')}")
     if "NEED_LOGIN" in codes:
-        channel = codes["NEED_LOGIN"][0].split("/")[0]
-        return {"state": "NEED_LOGIN", "channel": channel,
+        channels = []
+        for target in codes["NEED_LOGIN"]:
+            ch = target.split("/")[0]
+            if ch and ch not in channels:
+                channels.append(ch)
+        return {"state": "NEED_LOGIN", "channel": channels[0] if channels else None,
+                "channels": channels,
                 "error": "needs login: " + ", ".join(sorted(codes["NEED_LOGIN"]))}
     summary = "; ".join(
         f"{code} at {', '.join(sorted(targets))}" for code, targets in sorted(codes.items())
@@ -327,27 +332,56 @@ def poll_once(*, timeout: Optional[float] = None) -> dict:
                 fields.update({
                     "session_state": "down",
                     "last_error": f"container state: {c['state'] or 'unknown'}",
-                    "pending_login": 0,
                 })
+                # restarting/paused is transient — a login window may still be
+                # up. Only a real stop drops the latch.
+                if c["state"] not in ("restarting", "paused"):
+                    fields["pending_login"] = 0
+                    fields["login_channel"] = None
             else:
                 check = _check(c["name"], timeout)
                 fields["session_state"] = check["state"]
                 fields["last_error"] = check["error"]
+                # Recreated container = new profile, cookies gone: re-fire.
+                if (prev.get("container_id") and c.get("container_id")
+                        and prev.get("container_id") != c.get("container_id")):
+                    fields["pending_login"] = 0
+                    fields["login_channel"] = None
                 if check["state"] == "ok":
                     fields["pending_login"] = 0
                     fields["login_channel"] = None
                 elif check["state"] == "NEED_LOGIN":
-                    fields["login_channel"] = check["channel"]
-                    if prev.get("session_state") != "NEED_LOGIN" and not fields["pending_login"] and check["channel"]:
-                        fired, err = _fire_relogin(c["name"], check["channel"], timeout)
+                    already = set()
+                    if fields["pending_login"] and fields.get("login_channel"):
+                        already = {p for p in str(fields["login_channel"]).split(",") if p}
+                    channels = list(check.get("channels") or [])
+                    if not channels and check.get("channel"):
+                        channels = [check["channel"]]
+                    spawned, failed = [], []
+                    for ch in channels:
+                        if ch in already:
+                            continue
+                        fired, err = _fire_relogin(c["name"], ch, timeout)
                         if fired:
-                            fields["pending_login"] = 1
-                            relogins.append(c["name"])
-                            fields["last_error"] = (check["error"] or "") + (
-                                f"; relogin window opened for {check['channel']} — pending operator"
-                            )
+                            already.add(ch)
+                            spawned.append(ch)
                         else:
-                            fields["last_error"] = (check["error"] or "") + f"; relogin spawn failed: {err}"
+                            failed.append(f"{ch}: {err}")
+                    notes = []
+                    if spawned:
+                        relogins.append(c["name"])
+                        notes.append(
+                            "relogin window opened for "
+                            + ", ".join(spawned)
+                            + " — pending operator"
+                        )
+                    if failed:
+                        notes.append("relogin spawn failed: " + "; ".join(failed))
+                    if notes:
+                        base = check["error"] or ""
+                        fields["last_error"] = base + ("; " if base else "") + "; ".join(notes)
+                    fields["pending_login"] = 1 if already else 0
+                    fields["login_channel"] = ",".join(sorted(already)) if already else None
             _upsert(conn, c["name"], fields)
         for name, prev in prior.items():
             if name not in seen:

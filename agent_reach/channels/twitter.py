@@ -69,6 +69,14 @@ class TwitterChannel(Channel):
             (Param("target", "tweet id or link"),),
             (("opencli", "_opencli_thread"),),
         ),
+        Action(
+            "post",
+            "Post a tweet",
+            (Param("text", "tweet content"),),
+            # CDP inside the shared browser (backend label "opencli" so the
+            # dispatcher serializes it with other browser traffic).
+            (("opencli", "_post"),),
+        ),
     )
 
     def can_handle(self, url: str) -> bool:
@@ -89,3 +97,8 @@ class TwitterChannel(Channel):
     def _opencli_thread(self, *, target: str, timeout: float) -> list:
         tweet_id = str(target).rstrip("/").split("/")[-1].split("?")[0]
         return _x(["thread", tweet_id], timeout)
+
+    def _post(self, *, text: str, timeout: float) -> list:
+        from ._twitter_write import twitter_post
+
+        return twitter_post(text=text, timeout=timeout)

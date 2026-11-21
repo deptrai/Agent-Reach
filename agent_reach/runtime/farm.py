@@ -1,8 +1,8 @@
 """Multi-account farm registry: a SQLite-WAL accounts table under state.root()/"farm".
 
-Scope so far: add/list plus per-account env resolution. No ledger table, no
-container/netns work, and no credential or session copying — account rows plus
-an empty HOME skeleton.
+Scope: add/list, per-account env resolution, and the actions_log ledger
+(record_action/ledger_24h). No container/netns work, and no credential or
+session copying — account rows plus an empty HOME skeleton.
 """
 
 from __future__ import annotations
@@ -33,7 +33,13 @@ _SCHEMA = (
     "age INTEGER NOT NULL, "
     "ban_status TEXT NOT NULL DEFAULT 'new', "
     "created_at INTEGER NOT NULL, "
-    "updated_at INTEGER NOT NULL)"
+    "updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS actions_log ("
+    "account TEXT NOT NULL REFERENCES accounts(name), "
+    "ts INTEGER NOT NULL, "
+    "action_class TEXT NOT NULL, "
+    "outcome TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS actions_log_account_ts ON actions_log (account, ts)",
 )
 
 _COLUMNS = "name, proxy, home, age, ban_status, created_at, updated_at"
@@ -58,7 +64,9 @@ def connect() -> sqlite3.Connection:
         mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
         if mode != "wal":
             raise ReachError(UPSTREAM_BROKEN, "registry cannot use WAL on this filesystem")
-        conn.execute(_SCHEMA)
+        conn.execute("PRAGMA busy_timeout=5000")
+        for stmt in _SCHEMA:
+            conn.execute(stmt)
         if sys.platform != "win32":
             os.chmod(db, 0o600)
     except Exception:
@@ -161,3 +169,93 @@ def account_env(name: str) -> dict:
         env["REACH_BROWSER_PROXY"] = row["proxy"]
     env["REACH_ACCOUNT"] = name
     return env
+
+
+_BUSY_RETRIES = 3
+
+
+def _with_busy_retry(fn, what: str = "registry"):
+    """Run fn(); on SQLITE_BUSY after busy_timeout, retry a bounded number of times."""
+    last = None
+    for _ in range(_BUSY_RETRIES + 1):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            last = exc
+            time.sleep(0.05)
+    raise ReachError(UPSTREAM_BROKEN, f"{what} stayed busy: {last}")
+
+
+def _require_account(conn: sqlite3.Connection, name: str) -> None:
+    row = conn.execute("SELECT 1 FROM accounts WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        raise ReachError(
+            NEED_SETUP,
+            f"unknown farm account: {name}",
+            hint=f"Run `agent-reach farm account add {name} --proxy <url>` first.",
+        )
+
+
+def record_action(account: str, action_class: str, outcome: str) -> dict:
+    """Append one actions_log row for a registered account (one short transaction)."""
+    _validate_name(account)
+    if not isinstance(action_class, str) or not action_class:
+        raise ReachError(BAD_INPUT, "action_class must be a non-empty string")
+    if not isinstance(outcome, str) or not outcome:
+        raise ReachError(BAD_INPUT, "outcome must be a non-empty string")
+    now = int(time.time())
+
+    def _insert() -> None:
+        with closing(connect()) as conn:
+            with conn:
+                _require_account(conn, account)
+                conn.execute(
+                    "INSERT INTO actions_log (account, ts, action_class, outcome) "
+                    "VALUES (?, ?, ?, ?)",
+                    (account, now, action_class, outcome),
+                )
+
+    _with_busy_retry(_insert)
+    return {"account": account, "ts": now, "action_class": action_class, "outcome": outcome}
+
+
+def ledger_24h(account: str) -> dict:
+    """Rolling-24h action counts for one registered account.
+
+    Only outcome='success' rows count toward `success`; every row in the window
+    counts toward `attempts`. Shape: {"account", "window_hours", "success",
+    "attempts", "by_class": {<class>: {"success", "attempts"}}}.
+    """
+    _validate_name(account)
+    since = int(time.time()) - 86400
+
+    def _query():
+        with closing(connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            _require_account(conn, account)
+            return conn.execute(
+                "SELECT action_class, outcome, COUNT(*) AS n FROM actions_log "
+                "WHERE account = ? AND ts >= ? GROUP BY action_class, outcome",
+                (account, since),
+            ).fetchall()
+
+    rows = _with_busy_retry(_query, "farm account ledger")
+    success = attempts = 0
+    by_class = {}
+    for row in rows:
+        n = row["n"]
+        bucket = by_class.setdefault(row["action_class"], {"success": 0, "attempts": 0})
+        bucket["attempts"] += n
+        attempts += n
+        if row["outcome"] == "success":
+            bucket["success"] += n
+            success += n
+    return {
+        "account": account,
+        "window_hours": 24,
+        "success": success,
+        "attempts": attempts,
+        "by_class": by_class,
+    }

@@ -60,7 +60,7 @@ For the user:
   agent-reach remove <channel>            remove a channel (defaults too) and what only it used
   agent-reach login|logout <channel>      log in (the user does it) / forget the login
   agent-reach browser setup|status|stop   headless shared browser; login opens a window
-  agent-reach farm account add|list|env   multi-account farm registry (ledger later)
+  agent-reach farm account add|list|env|ledger   multi-account farm registry
   agent-reach browser profiles|use ID    choose an existing local login source
   agent-reach skill [link|unlink <dir>]   where the agent skill is; link it for another AI, or unlink one for good
   agent-reach doctor [--text]             status of every channel and installed tool versions (no network)
@@ -582,7 +582,13 @@ def _cmd_farm(args: Sequence[str]) -> int:
             return _bad_input(None, "farm account env",
                               "usage: agent-reach farm account env <name>")
         return _mgmt("farm account env", farm.account_env, ns.name)
-    return _bad_input(None, "farm account", "valid ops: add <name> --proxy <url>, list, env <name>")
+    if ns.sub == "ledger":
+        if not ns.name or ns.proxy:
+            return _bad_input(None, "farm account ledger",
+                              "usage: agent-reach farm account ledger <name>")
+        return _mgmt("farm account ledger", farm.ledger_24h, ns.name)
+    return _bad_input(None, "farm account",
+                      "valid ops: add <name> --proxy <url>, list, env <name>, ledger <name>")
 
 
 def main(argv: Sequence[str]) -> int:

@@ -4,6 +4,7 @@
 import json
 import sqlite3
 import stat
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import pytest
 
 from agent_reach.runtime import cli as unified
 from agent_reach.runtime import farm, state
+from agent_reach.runtime.result import BAD_INPUT, NEED_SETUP, ReachError
 
 ACCOUNT_FIELDS = {"name", "proxy", "home", "age", "ban_status", "created_at", "updated_at"}
 
@@ -191,3 +193,150 @@ def test_module_add_list_direct():
     assert row["ban_status"] == "new"
     rows = farm.list_accounts()
     assert [r["name"] for r in rows] == ["direct"]
+
+
+def test_ledger_happy_path_via_cli(capsys):
+    farm.add_account("test1", "http://p1:8080")
+    for outcome in ("success", "success", "success", "RATE_LIMITED", "TIMEOUT"):
+        farm.record_action("test1", "post", outcome)
+    code, out = _run(capsys, ["farm", "account", "ledger", "test1"])
+    assert code == 0
+    assert out["ok"] is True
+    assert out["action"] == "farm account ledger"
+    result = out["result"]
+    assert result["account"] == "test1"
+    assert result["window_hours"] == 24
+    assert result["success"] == 3
+    assert result["attempts"] == 5
+    assert result["by_class"] == {"post": {"success": 3, "attempts": 5}}
+    json.dumps(out)
+
+
+def test_ledger_by_class_groups_classes(capsys):
+    farm.add_account("multi", "http://p:1")
+    farm.record_action("multi", "post", "success")
+    farm.record_action("multi", "post", "success")
+    farm.record_action("multi", "reply", "success")
+    farm.record_action("multi", "reply", "PLATFORM_BLOCKED")
+    farm.record_action("multi", "like", "NEED_LOGIN")
+    code, out = _run(capsys, ["farm", "account", "ledger", "multi"])
+    assert code == 0
+    result = out["result"]
+    assert result["by_class"] == {
+        "post": {"success": 2, "attempts": 2},
+        "reply": {"success": 1, "attempts": 2},
+        "like": {"success": 0, "attempts": 1},
+    }
+    assert result["success"] == 3
+    assert result["attempts"] == 5
+
+
+def test_ledger_empty_account_zeros(capsys):
+    farm.add_account("empty", "http://p:1")
+    code, out = _run(capsys, ["farm", "account", "ledger", "empty"])
+    assert code == 0
+    result = out["result"]
+    assert result["success"] == 0
+    assert result["attempts"] == 0
+    assert result["by_class"] == {}
+
+
+def test_ledger_excludes_rows_older_than_24h(capsys):
+    farm.add_account("stale", "http://p:1")
+    farm.record_action("stale", "post", "success")
+    old_ts = int(time.time()) - 90000
+    with closing(farm.connect()) as conn, conn:
+        conn.execute(
+            "INSERT INTO actions_log (account, ts, action_class, outcome) "
+            "VALUES (?, ?, ?, ?)",
+            ("stale", old_ts, "post", "success"),
+        )
+        conn.execute(
+            "INSERT INTO actions_log (account, ts, action_class, outcome) "
+            "VALUES (?, ?, ?, ?)",
+            ("stale", old_ts, "like", "RATE_LIMITED"),
+        )
+    code, out = _run(capsys, ["farm", "account", "ledger", "stale"])
+    assert code == 0
+    result = out["result"]
+    assert result["success"] == 1
+    assert result["attempts"] == 1
+    assert result["by_class"] == {"post": {"success": 1, "attempts": 1}}
+
+
+def test_ledger_does_not_count_other_accounts(capsys):
+    farm.add_account("mine", "http://p:1")
+    farm.add_account("other", "http://p:2")
+    farm.record_action("other", "post", "success")
+    farm.record_action("other", "post", "success")
+    code, out = _run(capsys, ["farm", "account", "ledger", "mine"])
+    assert code == 0
+    assert out["result"]["success"] == 0
+    assert out["result"]["attempts"] == 0
+
+
+def test_ledger_unknown_account_is_need_setup(capsys):
+    code, out = _run(capsys, ["farm", "account", "ledger", "ghost"])
+    assert code == 1
+    assert out["ok"] is False
+    assert out["error"]["code"] == NEED_SETUP
+
+
+def test_record_action_unknown_account_is_need_setup():
+    farm.add_account("ok", "http://p:1")
+    with pytest.raises(ReachError) as excinfo:
+        farm.record_action("ghost", "post", "success")
+    assert excinfo.value.code == NEED_SETUP
+
+
+@pytest.mark.parametrize("name", ["../x", "has space", "a/b", ""])
+def test_ledger_bad_name_is_bad_input(capsys, name):
+    code, out = _run(capsys, ["farm", "account", "ledger", name])
+    assert code == 1
+    assert out["error"]["code"] == BAD_INPUT
+
+
+@pytest.mark.parametrize("action_class,outcome", [
+    ("", "success"), ("post", ""), (None, "success"), ("post", None),
+    (123, "success"), ("post", 0),
+])
+def test_record_action_bad_class_or_outcome(action_class, outcome):
+    farm.add_account("ok", "http://p:1")
+    with pytest.raises(ReachError) as excinfo:
+        farm.record_action("ok", action_class, outcome)
+    assert excinfo.value.code == BAD_INPUT
+
+
+@pytest.mark.parametrize("argv", [
+    ["farm", "account", "ledger"],
+    ["farm", "account", "ledger", "a", "b"],
+    ["farm", "account", "ledger", "a", "--proxy", "http://p:1"],
+])
+def test_ledger_usage_errors_are_bad_input(capsys, argv):
+    code, out = _run(capsys, argv)
+    assert code == 1
+    assert out["error"]["code"] == BAD_INPUT
+
+
+def test_record_action_returns_inserted_row():
+    farm.add_account("ret", "http://p:1")
+    row = farm.record_action("ret", "reply", "success")
+    assert row["account"] == "ret"
+    assert row["action_class"] == "reply"
+    assert row["outcome"] == "success"
+    assert isinstance(row["ts"], int) and row["ts"] > 0
+
+
+def test_connect_sets_busy_timeout_and_actions_log_schema():
+    farm.add_account("bt", "http://p:1")
+    with closing(farm.connect()) as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
+            ).fetchall()
+        }
+    assert "accounts" in tables
+    assert "actions_log" in tables
+    assert "actions_log_account_ts" in tables

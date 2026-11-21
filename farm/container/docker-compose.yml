@@ -22,15 +22,21 @@ services:
       REACH_BROWSER_PROXY: ${REACH_BROWSER_PROXY:?REACH_BROWSER_PROXY is required}
       REACH_BROWSER_PROFILE: ${REACH_BROWSER_PROFILE:-linux-desktop-chrome}
       FARM_BOOT_CHECK: ${FARM_BOOT_CHECK:-1}
+      FARM_KILLSWITCH: ${FARM_KILLSWITCH:-1}
     labels:                               # fleet manager discovery (story 14.4)
       com.agent-reach.farm: "1"
       com.agent-reach.account: ${REACH_ACCOUNT:?REACH_ACCOUNT is required}
     volumes:
       - home:/home/farm/.agent-reach      # per-account HOME slice (named volume)
     stop_grace_period: 30s                # let the watcher save session cookies
-    # Story 14.3 swaps this default bridge for a dedicated netns + hard egress
-    # kill-switch (zero route except proxy_i). Deliberately unchanged here —
-    # bridge 127.0.0.1:19825 already lives inside this container's netns.
+    # Story 14.3 — netns hard kill-switch (contract §2 layer-2). The entrypoint
+    # starts as root just long enough to install OUTPUT iptables rules inside
+    # THIS container's netns (loopback + tcp proxy_ip:port only, DNS/DoT dead,
+    # policy DROP), then re-execs as uid `farm` via runuser — nothing inside
+    # keeps NET_ADMIN to undo it. `docker exec` defaults to root — pass `-u farm`.
+    user: root
+    cap_add:
+      - NET_ADMIN
 
 volumes:
   home: {}

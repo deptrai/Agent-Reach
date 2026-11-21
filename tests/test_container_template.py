@@ -67,7 +67,7 @@ def test_compose_contract():
     assert "REACH_ACCOUNT" in COMPOSE
     assert "REACH_BROWSER_PROXY" in COMPOSE
     assert "/home/farm/.agent-reach" in COMPOSE
-    assert "network_mode" not in COMPOSE  # netns swap is story 14.3
+    assert "network_mode" not in COMPOSE  # 14.3 chose in-netns iptables, not a network swap
 
 
 def test_entrypoint_health_probe():

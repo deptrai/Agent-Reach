@@ -101,13 +101,15 @@ with tempfile.TemporaryDirectory() as work:
     shutil.move(manifest, "/opt/farm-seed/extension")
 print(f"opencli extension seeded from release v{ver}: {asset['name']}")
 PY
+# The extracted tree lands mode-700 (TemporaryDirectory) — the entrypoint seeds
+# it as uid `farm`, and under the 14.3 kill-switch there is no runtime
+# re-download to fall back on, so the seed must be world-readable.
+RUN chmod -R a+rX /opt/farm-seed
 
 # Dedicated account home (HOME riêng per container; volume mounts .agent-reach).
 RUN useradd --create-home --uid 1000 farm \
     && mkdir -p /home/farm/.agent-reach \
     && chown -R farm:farm /home/farm
-COPY farm/container/entrypoint.sh /usr/local/bin/farm-entrypoint
-RUN chmod 755 /usr/local/bin/farm-entrypoint
 
 USER farm
 ENV HOME=/home/farm \
@@ -121,6 +123,18 @@ ENV HOME=/home/farm \
 # in-image for audit. Lives under /home/farm/.local — outside the account volume.
 RUN python -m agent_reach.backends.shard install \
     && python -m agent_reach.backends.shard version | tee /home/farm/farm-versions.json
+
+# Story 14.3 — netns hard kill-switch. Kept in the tail on purpose: the heavy
+# layers above stay cached when the scripts change. iptables (nf_tables on
+# bookworm) is the egress enforcement tool — apt pin = base image tag.
+# `user: root` + `cap_add: NET_ADMIN` come from compose/CLI at run time; the
+# entrypoint applies the rules then drops to uid `farm` via runuser.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends iptables curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --chmod=755 farm/container/entrypoint.sh /usr/local/bin/farm-entrypoint
+COPY --chmod=755 farm/container/netns-killswitch.sh /usr/local/bin/farm-netns-killswitch
+USER farm
 
 # Boot probe = `agent-reach check` (JSON to stdout; exit code = health), then CMD.
 ENTRYPOINT ["/usr/local/bin/farm-entrypoint"]

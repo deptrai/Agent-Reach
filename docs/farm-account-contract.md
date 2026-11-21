@@ -59,7 +59,7 @@ proxy. The invariant is about the egress *path*, not the observed address.
 | Layer | Mechanism | Strength | Status |
 |---|---|---|---|
 | 1 — dispatch soft-check | Pre-flight at dispatch: proxy configured + non-empty + matches registry row, then a TCP handshake probe (5s, verdict cached ~60s). Failure → `PLATFORM_BLOCKED`, never direct. | Best-effort: catches misconfiguration and dead proxies at the application layer; cannot stop a kernel-level leak. | Implemented — `_enforce_proxy_kill_switch` (story 13.2) |
-| 2 — netns hard-enforce | Container/netns routing makes egress outside proxy_i impossible at the network layer. | Hard: the leak path does not exist. | **Deferred** — baked by epic-fleet-orchestration |
+| 2 — netns hard-enforce | Container/netns routing makes egress outside proxy_i impossible at the network layer. | Hard: the leak path does not exist. | Implemented — `farm-netns-killswitch` iptables rules (story 14.3) |
 
 Layer 1 without layer 2 is accepted risk during the env-injection phase
 (epic constraint C1): soft-check is the pre-flight guard, hard enforcement
@@ -163,13 +163,13 @@ CREATE TABLE IF NOT EXISTS actions_log (
 | `NEED_SETUP` on unknown account, no silent default `HOME` | Contract — bound here | story 11.4 |
 | Kill-switch semantics "zero egress outside proxy_i, fail-closed" | Contract — bound here | this doc is the single definition |
 | Layer-1 dispatch soft-check | Implemented | story 13.2 (`dispatch._enforce_proxy_kill_switch`) |
-| Layer-2 netns hard-enforce | **Deferred** | epic-fleet-orchestration |
+| Layer-2 netns hard-enforce | Implemented | story 14.3 (`farm/container/netns-killswitch.sh`) |
 | `actions_log` schema, `record_action`, rolling-24h query, `ledger` CLI | Contract — bound here | story 11.5 |
 | `PERSISTED_QUERY_DEAD` error class in `result.py` | Contract — bound here | story 11.6 |
 | PQD → fallback routing, fallback lane wiring | **Deferred** (rule bound here) | epic-farm-resilience |
 | Caps / warm-up enforcement reading the ledger | Implemented | stories 13.1 + 13.3 (`dispatch._enforce_write_quota`) |
 | `ban_status` transition automation | **Deferred** | epic-fleet-orchestration |
-| Container template, per-account netns/bridge bind | **Deferred** (env contract fixed here) | epic-fleet-orchestration |
+| Container template, per-account netns/bridge bind | Implemented | stories 14.2 + 14.3 (`farm/container/`) |
 
 ### Implemented — dispatch guardrails (stories 13.1–13.3)
 

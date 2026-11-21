@@ -303,6 +303,44 @@ def _farm_env_enter():
     return restore
 
 
+#: Write verbs per channel for the farm ledger seam (contract §3). Only actions
+#: listed here append an `actions_log` row; the verb itself is `action_class`.
+#: Scoped per channel because verb names collide across platforms — xueqiu's
+#: `quote` is a read while twitter's `quote`/`thread` are write lanes (12.5/12.6).
+#: A new write action records automatically once its verb is listed here.
+WRITE_ACTIONS = {
+    "facebook": {
+        "post", "post-edit", "post-delete", "react", "unreact",
+        "comment", "uncomment", "share", "message",
+    },
+    "twitter": {"post", "reply", "quote", "thread"},
+}
+
+
+def _record_farm_write(channel_name: str, action_name: str, result: dict) -> None:
+    """Append one `actions_log` row for a write run under REACH_ACCOUNT.
+
+    Reads the selector from the (restored) env: a nested run_action inside an
+    outer window still sees it, and the REACH_FARM_ROOT pin keeps the write on
+    the operator registry. Unset → single-account path, skip silently.
+    Fail-safe: ledger errors never reach the result envelope.
+    """
+    if action_name not in WRITE_ACTIONS.get(channel_name, ()):
+        return
+    account = os.environ.get("REACH_ACCOUNT")
+    if not account:
+        return
+    outcome = "success" if result.get("ok") else str(
+        (result.get("error") or {}).get("code") or UPSTREAM_BROKEN
+    )
+    try:
+        from . import farm
+
+        farm.record_action(account, action_name, outcome)
+    except Exception:  # noqa: BLE001 - ledger writes must never break the action
+        pass
+
+
 def run_action(
     channel: Channel,
     action_name: str,
@@ -311,7 +349,28 @@ def run_action(
     timeout: float = DEFAULT_TIMEOUT,
     only_backend: Optional[str] = None,
 ) -> dict:
-    """Execute one unified action and return the envelope dict."""
+    """Execute one unified action and return the envelope dict.
+
+    Under REACH_ACCOUNT a write verb also records the run's final outcome in
+    the farm ledger (after fallback attempts); the recording never changes
+    the returned result.
+    """
+    result = _run_action(
+        channel, action_name, params, timeout=timeout, only_backend=only_backend
+    )
+    _record_farm_write(channel.name, action_name, result)
+    return result
+
+
+def _run_action(
+    channel: Channel,
+    action_name: str,
+    params: Dict[str, Any],
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    only_backend: Optional[str] = None,
+) -> dict:
+    """Dispatch one action across its backends (see run_action for the ledger seam)."""
     started = time.monotonic()
 
     def elapsed() -> int:

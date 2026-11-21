@@ -19,6 +19,7 @@ from .result import (
     BAD_INPUT,
     FINAL_CODES,
     NEED_SETUP,
+    PERSISTED_QUERY_DEAD,
     PLATFORM_BLOCKED,
     QUOTA_EXCEEDED,
     RATE_LIMITED,
@@ -320,6 +321,13 @@ WRITE_ACTIONS = {
     "twitter": {"post", "reply", "quote", "thread"},
 }
 
+#: Errors that route a twitter write to the xactions HTTP lane instead of
+#: failing the run (story 16.2). Deliberately narrow: RATE_LIMITED and
+#: PLATFORM_BLOCKED keep their own semantics and never fall back, and a
+#: dead doc-id stays FINAL everywhere else (no retry, no backend pause).
+FALLBACK_TRIGGERS = {PERSISTED_QUERY_DEAD}
+_SCHEMA_ERROR_MARKERS = ("schema", "variables", "fieldnotdefined")
+
 #: Default per-class caps (successes / rolling 24h). Override with
 #: REACH_CAP_<CLASS> (`post-edit` → REACH_CAP_POST_EDIT). A class absent here
 #: is unlimited until an operator sets the env var. `0` refuses every write.
@@ -553,6 +561,35 @@ def _enforce_write_quota(channel_name: str, action_name: str) -> None:
         )
 
 
+def _schema_error(err: ReachError) -> bool:
+    """An upstream schema rejection (unknown field, bad variables) — the other
+    half of the 16.2 trigger, distinct from a plain upstream outage."""
+    if err.code != UPSTREAM_BROKEN:
+        return False
+    text = err.message.lower().replace(" ", "")
+    return any(marker in text for marker in _SCHEMA_ERROR_MARKERS)
+
+
+def _xactions_fallback(channel_name, action_name, clean, errors, clock):
+    """Replay a failed twitter write on the xactions HTTP lane, once.
+
+    Returns (items, None) on success, (None, ReachError) on a lane failure,
+    or None when the fallback does not apply. Never raises.
+    """
+    if channel_name != "twitter" or action_name not in ("post", "reply", "quote", "thread"):
+        return None
+    if not any(e.code in FALLBACK_TRIGGERS or _schema_error(e) for e in errors):
+        return None
+    try:
+        from . import xactions_lane
+
+        return xactions_lane.run(action_name, clean, timeout=max(clock.remaining(), 1.0)), None
+    except ReachError as exc:
+        return None, exc
+    except Exception as exc:  # noqa: BLE001 - the lane must not crash the run
+        return None, ReachError(UPSTREAM_BROKEN, f"xactions fallback failed: {exc}")
+
+
 def _record_farm_write(channel_name: str, action_name: str, result: dict) -> None:
     """Append one `actions_log` row for a write run under REACH_ACCOUNT.
 
@@ -730,6 +767,24 @@ def _run_action(
                     public["meta"]["attempts"] = attempts
                     public["meta"]["elapsed_ms"] = elapsed()
                     return public
+
+        # 16.2 fallback: a twitter write died with a dead persisted query or
+        # an upstream schema error. Those stay out of RATE_LIMITED /
+        # PLATFORM_BLOCKED semantics; the lane is tried exactly once, after
+        # the gates above (kill-switch + quota) already passed. A lane
+        # failure is reported as-is — it is never reclassified.
+        fallback = _xactions_fallback(channel.name, action_name, clean, errors, clock)
+        if fallback is not None:
+            items, lane_error = fallback
+            if lane_error is None:
+                attempts.append({"backend": "xactions-fallback", "result": "ok"})
+                return envelope(
+                    channel=channel.name, action=action_name, backend="xactions-fallback",
+                    items=items, elapsed_ms=elapsed(), attempts=attempts,
+                )
+            attempts.append({"backend": "xactions-fallback", "result": lane_error.code,
+                             "message": lane_error.message})
+            errors.append(lane_error)
     except ReachError as exc:
         errors.append(exc)
     finally:

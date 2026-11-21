@@ -116,15 +116,59 @@ The bridge applies the pool DDL `CREATE TABLE IF NOT EXISTS` identically to
 `accountPool.js` (including the `lock_until` column `ALTER`), so a
 bridge-created store opens cleanly under the real pool and vice versa.
 
-## 6. Doc-id rotate hook (for story 16.2)
+## 6. Fallback lane (story 16.2)
 
-The fallback lane (story 16.2) replays X's persisted GraphQL doc-ids. Reach
-keeps its ids in `query-ids.json`; XActions keeps `endpoint.url`/query-id
-state under `$XACTIONS_HOME`. When either store rotates a doc-id, the other
-**must** be updated in the same change — the bridge module is the seam where
-that sync lives (a `sync_doc_ids()`-style hook); until 16.2 lands this section
-only binds the rule that **one** of the stores is written first and the sync
-is deterministic, not ad-hoc per lane.
+When a twitter write (`post`/`reply`/`quote`/`thread`) dies with
+`PERSISTED_QUERY_DEAD` — or with `UPSTREAM_BROKEN` whose message names a
+schema rejection (`schema` / `variables` / `fieldnotdefined`) — dispatch
+replays it **once** on the XActions HTTP lane
+(`agent_reach/runtime/xactions_lane.py`). Anything else keeps its own
+semantics: `RATE_LIMITED`, `PLATFORM_BLOCKED`, `QUOTA_EXCEEDED` never fall
+back, and a dead doc-id stays final on every other path (no retry, no
+backend pause).
+
+- **Gates first.** The lane runs inside the dispatch env window, after
+  `_enforce_proxy_kill_switch` and `_enforce_write_quota`. A dead proxy or a
+  spent cap refuses the run before the lane exists; a lane success is a
+  normal ledger `success` and counts toward the cap.
+- **No link, no lane.** An account without an `xactions_link` row (or whose
+  pool entry is locked / unprovisioned) surfaces the original error.
+- **Proxy path.** Egress is the pool entry's `accounts.proxy` column — the
+  per-account proxy `link()` copied from the registry, which
+  `TwitterHttpClient` dials through `undici.ProxyAgent` (`client.js`). The
+  lane never trusts the process env for egress: inside the dispatch window
+  `HOME` is the account's private home, so the child process is handed the
+  operator home (parent of `REACH_FARM_ROOT`) and the pool store is opened
+  from `XACTIONS_HOME` or `<operator home>/.xactions/accounts.db`.
+- **Invocation.** No XActions CLI/MCP verb both selects a pool entry and
+  posts (`xactions client post` uses the legacy cookie jar; MCP
+  `x_post_tweet` text goes through a browser), so the lane is a one-shot
+  `node --input-type=module` script over the public module
+  `src/scrapers/twitter/http` (`createAccountPool` + `postTweet` /
+  `replyToTweet` / `quoteTweet` / `postThread`). Repo root: `XACTIONS_REPO`,
+  else the checkout beside this repo.
+
+## 7. Doc-id sync — Reach is the source of truth
+
+XActions has no `endpoint.url` file. `endpoints.js` builds the GraphQL URL
+from the query id `queryIds.js` `resolveOperation` returns, and that
+resolves **cache first** (`$XACTIONS_HOME/query-ids.json`), hardcoded table
+second. So the cache is the store a sync can write without forking XActions,
+and writing it is exactly what makes the lane replay Reach's ids.
+
+Reach's `query-ids.json` wins because it is the file the write lanes replay
+and the file `doctor --probe-docids` probes — a rotation is detected and
+edited there. Sync is one direction, X operations only (facebook ids never
+cross), and it keeps XActions-only cache entries untouched:
+
+```
+agent-reach farm sync-docids           # dry-run: prints the diff, writes nothing
+agent-reach farm sync-docids --apply   # writes Reach's `x` ids into the cache
+```
+
+Dry-run is the default so a rotation review happens before anything reaches
+the lane. `xactions_docids.plan()` / `.apply()` back both.
+
 
 ## References
 

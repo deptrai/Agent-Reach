@@ -61,6 +61,8 @@ For the user:
   agent-reach login|logout <channel>      log in (the user does it) / forget the login
   agent-reach browser setup|status|stop   headless shared browser; login opens a window
   agent-reach farm account add|list|env|ledger   multi-account farm registry
+  agent-reach farm sync-docids [--apply]   sync X doc-ids to the XActions cache (dry-run)
+  agent-reach farm drift [--once]          doc-id drift probe + alert; loops every 6h (jittered) unless --once
   agent-reach browser profiles|use ID    choose an existing local login source
   agent-reach skill [link|unlink <dir>]   where the agent skill is; link it for another AI, or unlink one for good
   agent-reach doctor [--text] [--probe-docids]
@@ -569,14 +571,42 @@ def _cmd_farm(args: Sequence[str]) -> int:
     from . import farm
 
     parser = _Parser(prog="farm", add_help=False)
-    parser.add_argument("op", choices=("account",))
+    parser.add_argument("op", choices=("account", "sync-docids", "drift"))
     parser.add_argument("sub", nargs="?")
     parser.add_argument("name", nargs="?")
     parser.add_argument("--proxy", default=None)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--once", action="store_true")
     try:
         ns = parser.parse_args(list(args))
     except _ArgError as exc:
         return _bad_input(None, "farm", str(exc))
+    if ns.op == "drift":
+        if ns.sub or ns.name or ns.proxy or ns.apply:
+            return _bad_input(None, "farm drift",
+                              "usage: agent-reach farm drift [--once]")
+        from . import farm_drift
+
+        if ns.once:
+            return _mgmt("farm drift", farm_drift.run_once)
+        try:
+            farm_drift.run_forever()
+        except ReachError as exc:
+            return _emit({"schema_version": SCHEMA_VERSION, "ok": False, "action": "farm drift",
+                          "result": None,
+                          "error": {"code": exc.code, "message": exc.message,
+                                    "hint": exc.hint or DEFAULT_HINTS.get(exc.code, "")}})
+        except KeyboardInterrupt:
+            return 0
+        return 0
+    if ns.op == "sync-docids":
+        if ns.sub or ns.name or ns.proxy:
+            return _bad_input(None, "farm sync-docids",
+                              "usage: agent-reach farm sync-docids [--apply]")
+        from . import xactions_docids
+
+        fn = xactions_docids.apply if ns.apply else xactions_docids.plan
+        return _mgmt("farm sync-docids" + (" --apply" if ns.apply else ""), fn)
     if ns.sub == "add":
         if not ns.name or not ns.proxy:
             return _bad_input(None, "farm account add",

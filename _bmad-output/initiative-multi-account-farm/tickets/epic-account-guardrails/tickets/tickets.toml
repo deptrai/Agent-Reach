@@ -1,0 +1,52 @@
+# Tickets for epic-account-guardrails — guardrails per-account gắn dispatch
+[[entry]]
+id = 1
+type = "story"
+title = "Per-day quota enforcement"
+description = """
+Dispatch đọc caps per-account per-action_class per-day (env-configurable, ví dụ REACH_CAP_POST=10, REACH_CAP_REPLY=20, default chốt trong code) → query ledger_24h của epic 11.5 → vượt cap thì refuse TRƯỚC khi gọi platform (ReachError code phù hợp, message ghi rõ account + class + cap + count hiện tại). Chỉ áp cho write verbs (post/reply/quote/thread/share/comment/react/post-edit/post-delete) theo WRITE_ACTIONS map của 12.7; read actions không cap. Refusal phải surface lên operator qua JSON envelope (không nuốt).
+"""
+verify = "REACH_ACCOUNT=a1 + cap post=2 → post thứ 3 bị refuse ngay lập tức với message có 'cap'; ledger vẫn 2 rows success (refusal không ghi)."
+covers = ["R5", "R7"]
+after = []
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Kill-switch soft-check ở dispatch"
+description = """
+Pre-flight best-effort check proxy của account trước khi chạy action khi REACH_ACCOUNT set: proxy check nhanh (HTTP HEAD/CONNECT qua REACH_BROWSER_PROXY, timeout ngắn ~5s, cache verdict ngắn ~60s để không làm chậm mọi action) → proxy fail → refuse `PLATFORM_BLOCKED` (zero egress — KHÔNG fallback direct, KHÔNG so IP tuyệt đối). Semantics theo đúng docs/farm-account-contract.md §2 layer-1; netns hard-enforce là của epic-fleet-orchestration, không implement ở đây. Skip check khi account không có proxy (proxy-less = direct, hợp lệ theo contract) và khi REACH_ACCOUNT unset (legacy path).
+"""
+verify = "Account có proxy http://127.0.0.1:1 (proxy chết) + REACH_ACCOUNT set → action refuse PLATFORM_BLOCKED fail-closed, không action nào chạy; account không proxy → chạy bình thường."
+covers = ["R6"]
+after = []
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Warm-up ramp theo tuổi account"
+description = """
+Caps chặt dần theo tuổi: đọc field `age` (onboard epoch) từ registry → tuổi account theo ngày → scale cap (ví dụ d0-3: 25%, d4-7: 50%, d8-14: 75%, d15+: 100% — bảng ramp env-configurable hoặc chốt trong code). Kết hợp với 13.1: cap hiệu dụng = min(cap, cap × ramp). Engagement warm-up (like/follow ngẫu nhiên) là known gap — lanes chưa tồn tại, chỉ ghi Notes, không implement.
+"""
+verify = "Account mới 1 ngày tuổi + cap post=10 → chỉ được ~2 posts/ngày; account 30 ngày → full 10. Test bằng cách sửa `age` trong registry."
+covers = ["R5", "R7"]
+after = [1]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Guardrails e2e + docs + sweep"
+description = """
+Verify trên X write lane thật: REACH_ACCOUNT=test + cap nhỏ → post vượt cap refuse; proxy chết → PLATFORM_BLOCKED; refusal hiện trong JSON envelope. Update docs/farm-account-contract.md §6 (bỏ quota/kill-switch khỏi deferred table — đã implemented), docs e2e playbook. Sweep: không behavior mới.
+"""
+verify = "e2e: vượt cap → refuse message rõ; proxy chết → PLATFORM_BLOCKED; docs khớp code; suite xanh."
+covers = []
+after = [1, 2, 3]
+hitl = false
+risk = "low"

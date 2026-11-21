@@ -29,10 +29,11 @@ PLATFORM_BLOCKED = "PLATFORM_BLOCKED"
 NOT_FOUND = "NOT_FOUND"
 BAD_INPUT = "BAD_INPUT"
 PERSISTED_QUERY_DEAD = "PERSISTED_QUERY_DEAD"
+QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
 
 #: Codes where trying another backend cannot help.
 FINAL_CODES = frozenset({NOT_FOUND, BAD_INPUT, PLATFORM_BLOCKED, RATE_LIMITED, NEED_LOGIN,
-                         PERSISTED_QUERY_DEAD, "BUSY"})
+                         PERSISTED_QUERY_DEAD, QUOTA_EXCEEDED, "BUSY"})
 
 DEFAULT_HINTS = {
     "BUSY": "The shared browser stayed full while this command waited in line, or a login window is open. Retry later; do not switch profiles.",
@@ -45,6 +46,7 @@ DEFAULT_HINTS = {
     NOT_FOUND: "The requested content does not exist. Check the link or id.",
     BAD_INPUT: "Invalid arguments. Run `agent-reach channels` to see valid usage.",
     PERSISTED_QUERY_DEAD: "The Facebook document id is stale — re-capture the mutation skeleton; do not retry the same replay on this lane.",
+    QUOTA_EXCEEDED: "This account hit its daily cap for this action. Do not retry or switch backends; wait for the rolling 24h window, or raise REACH_CAP_<CLASS> if the operator intends to.",
 }
 
 _MAX_MESSAGE_CHARS = 500

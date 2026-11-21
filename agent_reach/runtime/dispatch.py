@@ -17,6 +17,7 @@ from .result import (
     BAD_INPUT,
     FINAL_CODES,
     NEED_SETUP,
+    QUOTA_EXCEEDED,
     RATE_LIMITED,
     TIMEOUT,
     UPSTREAM_BROKEN,
@@ -316,6 +317,66 @@ WRITE_ACTIONS = {
     "twitter": {"post", "reply", "quote", "thread"},
 }
 
+#: Default per-class caps (successes / rolling 24h). Override with
+#: REACH_CAP_<CLASS> (`post-edit` → REACH_CAP_POST_EDIT). A class absent here
+#: is unlimited until an operator sets the env var. `0` refuses every write.
+DEFAULT_CAPS = {
+    "post": 30,
+    "reply": 60,
+    "comment": 60,
+    "react": 200,
+    "share": 20,
+}
+
+
+def _cap_for(action_name: str) -> Optional[int]:
+    """Resolved cap, or None when this class is unlimited."""
+    key = "REACH_CAP_" + action_name.upper().replace("-", "_")
+    raw = os.environ.get(key)
+    if raw is not None:
+        try:
+            cap = int(raw)
+        except ValueError:
+            raise ReachError(BAD_INPUT, f"invalid {key}={raw!r}; expected a non-negative integer") from None
+        if cap < 0:
+            raise ReachError(BAD_INPUT, f"invalid {key}={raw!r}; expected a non-negative integer")
+        return cap
+    return DEFAULT_CAPS.get(action_name)
+
+
+def _enforce_write_quota(channel_name: str, action_name: str) -> None:
+    """Refuse a write whose 24h success count has reached the cap.
+
+    No-op for reads, verbs outside WRITE_ACTIONS, the legacy path (no
+    REACH_ACCOUNT), and unlimited classes — those never touch the ledger.
+    An unreadable ledger refuses the write (fail-closed): a cap that cannot
+    be checked must not become a free pass.
+    """
+    if action_name not in WRITE_ACTIONS.get(channel_name, ()):
+        return
+    account = os.environ.get("REACH_ACCOUNT")
+    if not account:
+        return
+    cap = _cap_for(action_name)
+    if cap is None:
+        return
+    try:
+        from . import farm
+
+        snap = farm.ledger_24h(account)
+    except ReachError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any ledger failure blocks the write
+        raise ReachError(UPSTREAM_BROKEN, f"quota check failed for account {account}: {exc}") from exc
+    by_class = snap.get("by_class") or {}
+    count = int((by_class.get(action_name) or {}).get("success") or 0)
+    if count >= cap:
+        raise ReachError(
+            QUOTA_EXCEEDED,
+            f"quota cap exceeded for account {account} action_class {action_name}: "
+            f"{count} success in 24h (cap {cap})",
+        )
+
 
 def _record_farm_write(channel_name: str, action_name: str, result: dict) -> None:
     """Append one `actions_log` row for a write run under REACH_ACCOUNT.
@@ -333,6 +394,10 @@ def _record_farm_write(channel_name: str, action_name: str, result: dict) -> Non
     outcome = "success" if result.get("ok") else str(
         (result.get("error") or {}).get("code") or UPSTREAM_BROKEN
     )
+    # Any refusal from the quota gate never reached the platform — not an
+    # attempt, whatever its code (over cap, unreadable ledger, bad cap).
+    if (result.get("meta") or {}).get("quota_refused"):
+        return
     try:
         from . import farm
 
@@ -397,6 +462,17 @@ def _run_action(
     except ReachError as exc:
         return envelope(channel=channel.name, action=action_name, elapsed_ms=elapsed(), error=exc)
     try:
+        # Cap check sits inside the env window (account is resolved) and
+        # before cooldown, public-web, and every backend. A gate refusal —
+        # over cap, unreadable ledger, bad cap value — never touched the
+        # platform, so the envelope is flagged for the record seam to skip.
+        try:
+            _enforce_write_quota(channel.name, action_name)
+        except ReachError as gate_error:
+            out = envelope(channel=channel.name, action=action_name,
+                           elapsed_ms=elapsed(), error=gate_error)
+            out["meta"]["quota_refused"] = True
+            return out
         limited = cooldown(channel.name)
         if limited:
             raise ReachError(RATE_LIMITED, limited["message"],

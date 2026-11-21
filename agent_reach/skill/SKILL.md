@@ -9,6 +9,7 @@ description: >
   写操作：Facebook post、react/unreact、comment/uncomment、post-edit、
   post-delete、share（发帖/分享默认仅自己可见，删除须 --confirm）；
   X/Twitter post、reply、quote、thread（纯文本无媒体，帖子天然公开、无受众选项）；
+  Reddit post、comment（文本或链接，须登录专用浏览器）；
   私信等其他写操作一律不做；
   不替用户登录、不索要密码。
   公开内容优先用 Agent 自带工具，Reach 补缺口。
@@ -19,7 +20,7 @@ metadata:
 
 # Agent Reach
 
-一个命令读所有平台：`agent-reach`。读为主（Facebook、X 支持写：post/reply/quote/thread、react/comment/share 等），默认输出一行 JSON。
+一个命令读所有平台：`agent-reach`。读为主（Facebook、X、Reddit 支持写：post/reply/quote/thread、react/comment/share、reddit post/comment），默认输出一行 JSON。
 
 动手前先说一句"用 agent-reach skill（X 渠道）"。本 skill 被调用后全程有效，以下规则一直适用。
 

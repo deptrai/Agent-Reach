@@ -319,6 +319,7 @@ WRITE_ACTIONS = {
         "comment", "uncomment", "share", "message",
     },
     "twitter": {"post", "reply", "quote", "thread"},
+    "reddit": {"post", "comment"},
 }
 
 #: Errors that route a twitter write to the xactions HTTP lane instead of

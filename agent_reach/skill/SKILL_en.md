@@ -7,7 +7,7 @@ description: >
   Instagram, Facebook or Xiaoyuzhou podcasts; or says "search / look up / read this link" and your built-in
   web search or fetch is unavailable, fails, or misses the body;
   or wants to install, add/remove a platform, log in/out, check status, update or uninstall Agent Reach.
-  Writes: Facebook post, react/unreact, comment/uncomment, post-edit, post-delete (needs --confirm), share — post/share default to only_me; X/Twitter post, reply, quote, thread — text only, no media, posts are public by nature with no audience option; messaging and all other writes are out of scope; never logs in for the user or asks for passwords.
+  Writes: Facebook post, react/unreact, comment/uncomment, post-edit, post-delete (needs --confirm), share — post/share default to only_me; X/Twitter post, reply, quote, thread — text only, no media, posts are public by nature with no audience option; Reddit post and comment — text or link, logged-in dedicated browser required; messaging and all other writes are out of scope; never logs in for the user or asks for passwords.
   Prefer your own tools for public content; Reach fills the gaps.
 metadata:
   homepage: https://github.com/Panniantong/Agent-Reach
@@ -16,7 +16,7 @@ metadata:
 
 # Agent Reach
 
-One command for every platform: `agent-reach`. Read-first (writes on Facebook and X: post/reply/quote/thread, react/comment/share, etc.); prints one JSON object by default.
+One command for every platform: `agent-reach`. Read-first (writes on Facebook, X, and Reddit: post/reply/quote/thread, react/comment/share, reddit post/comment); prints one JSON object by default.
 
 Before acting, say "using the agent-reach skill (channel X)". Once invoked, these rules apply for the whole session.
 

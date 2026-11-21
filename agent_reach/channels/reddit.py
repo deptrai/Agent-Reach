@@ -67,6 +67,27 @@ class RedditChannel(Channel):
             (("opencli", "_opencli_subreddit"),),
             live_test={"name": "python", "limit": 2},
         ),
+        Action(
+            "post",
+            "Post a text or link submission (logged-in reddit.com session)",
+            (
+                Param("subreddit", "name without r/, or u/name for your profile"),
+                Param("title", "post title"),
+                Param("text", "self-post body", required=False),
+                Param("url", "link post URL", required=False),
+            ),
+            # "opencli" so the dispatcher serializes this with other browser traffic.
+            (("opencli", "_post"),),
+        ),
+        Action(
+            "comment",
+            "Comment on a post or comment (thing fullname, logged-in session)",
+            (
+                Param("thing_id", "fullname, e.g. t3_abc"),
+                Param("text", "comment body"),
+            ),
+            (("opencli", "_comment"),),
+        ),
     )
 
     def can_handle(self, url: str) -> bool:
@@ -94,3 +115,13 @@ class RedditChannel(Channel):
 
     def _opencli_subreddit(self, *, name: str, limit: int, timeout: float) -> list:
         return _reddit(["subreddit", name.removeprefix("r/"), "--limit", str(limit)], timeout)[:limit]
+
+    def _post(self, *, subreddit: str, title: str, text=None, url=None, timeout: float) -> list:
+        from ._reddit_write import reddit_post
+
+        return reddit_post(subreddit=subreddit, title=title, text=text, url=url, timeout=timeout)
+
+    def _comment(self, *, thing_id: str, text: str, timeout: float) -> list:
+        from ._reddit_write import reddit_comment
+
+        return reddit_comment(thing_id=thing_id, text=text, timeout=timeout)

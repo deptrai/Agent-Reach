@@ -69,11 +69,14 @@ fi
 # Replies come back on INPUT (unrestricted) — no conntrack rule needed.
 iptables -P OUTPUT DROP
 iptables -F OUTPUT                                # idempotent: wipe, re-add
-iptables -A OUTPUT -o lo -j ACCEPT                # loopback: bridge :19825, CDP :9222
-iptables -A OUTPUT -p udp --dport 53 -j DROP      # DNS — no leak via any resolver
+# DNS/DoT BEFORE the loopback accept: Docker's embedded resolver is
+# 127.0.0.11:53 on `lo`, so a blanket `-o lo ACCEPT` would let queries leak
+# out through dockerd. Drop them first; first-match wins.
+iptables -A OUTPUT -p udp --dport 53 -j DROP
 iptables -A OUTPUT -p tcp --dport 53 -j DROP
 iptables -A OUTPUT -p udp --dport 853 -j DROP     # DNS-over-TLS
 iptables -A OUTPUT -p tcp --dport 853 -j DROP
+iptables -A OUTPUT -o lo -j ACCEPT                # loopback: bridge :19825, CDP :9222
 
 # IPv6: same zero-egress contract. A netns with an IPv6 stack but no ip6tables
 # is a leak path — fail closed rather than leave it open.
@@ -84,11 +87,11 @@ if [ -f /proc/net/if_inet6 ]; then
     }
     ip6tables -P OUTPUT DROP
     ip6tables -F OUTPUT
-    ip6tables -A OUTPUT -o lo -j ACCEPT
     ip6tables -A OUTPUT -p udp --dport 53 -j DROP
     ip6tables -A OUTPUT -p tcp --dport 53 -j DROP
     ip6tables -A OUTPUT -p udp --dport 853 -j DROP
     ip6tables -A OUTPUT -p tcp --dport 853 -j DROP
+    ip6tables -A OUTPUT -o lo -j ACCEPT
 fi
 
 # The single allowed egress: TCP to each resolved proxy IP on the proxy port.

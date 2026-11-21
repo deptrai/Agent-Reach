@@ -38,6 +38,9 @@ def test_killswitch_drops_all_non_proxy_egress():
     # DNS + DoT dead against every resolver (docker embedded DNS included).
     for port in (53, 853):
         assert f"--dport {port} -j DROP" in SCRIPT
+    # Order matters: Docker's embedded resolver is 127.0.0.11:53 on `lo`, so
+    # the DNS DROP must precede the loopback ACCEPT or queries leak via dockerd.
+    assert SCRIPT.index("--dport 53 -j DROP") < SCRIPT.index("-o lo -j ACCEPT")
 
 
 def test_killswitch_derives_allow_rule_from_proxy_env():

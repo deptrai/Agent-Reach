@@ -121,7 +121,7 @@ def test_comment_sends_form_through_stubbed_eval(monkeypatch):
     sent = {}
 
     def fake_eval(_tid, expr, timeout=30):
-        if "/web/comments/" in expr:
+        if "/api/graphql" in expr:
             sent["expr"] = expr
             return {"sent": True}
         if expr.startswith("window["):
@@ -137,9 +137,9 @@ def test_comment_sends_form_through_stubbed_eval(monkeypatch):
     monkeypatch.setattr(iw, "_eval", fake_eval)
     items = iw.ig_comment(target="https://www.instagram.com/p/Df5AG_slAwS/", text="nice post", timeout=30)
     expr = sent["expr"]
-    assert "/api/v1/web/comments/4033255421997485074/add/" in expr
-    assert "comment_text" in expr and "nice+post" in expr
-    assert "csrftok" in expr
+    assert "usePolarisCommentCreateMutation" in expr
+    assert "comment_text" in expr and "nice post" in expr
+    assert "4033255421997485074" in expr
     assert items[0]["text"] == "Commented"
     assert items[0]["url"] == "https://www.instagram.com/p/Df5AG_slAwS/#c18012345678901234"
     assert items[0]["raw"]["media_id"] == "4033255421997485074"
@@ -149,25 +149,26 @@ def test_like_and_unlike_paths_and_dup_guard(monkeypatch):
     sent = {}
 
     def fake_eval(_tid, expr, timeout=30):
-        if "/web/likes/" in expr:
+        if "/api/graphql" in expr:
             sent["expr"] = expr
             return {"sent": True, "dup": True}  # dedup sentinel short-circuits
         if expr.startswith("window["):
-            return {"status": 200, "parsed": True, "ok": True}
+            return {"status": 200, "parsed": True, "ok": True, "liked": True, "unliked": True}
         raise AssertionError(expr[:120])
 
     _stub_arm(monkeypatch)
     monkeypatch.setattr(iw, "_eval", fake_eval)
     items = iw.ig_like(target="Df5AG_slAwS", unlike=False, timeout=30)
-    assert "/api/v1/web/likes/4033255421997485074/like/" in sent["expr"]
+    assert "usePolarisLikeMediaXIGLikeMutation" in sent["expr"]
+    assert "4033255421997485074" in sent["expr"]
     assert items[0]["text"] == "Liked"
     iw.ig_like(target="Df5AG_slAwS", unlike=True, timeout=30)
-    assert "/api/v1/web/likes/4033255421997485074/unlike/" in sent["expr"]
+    assert "usePolarisLikeMediaXIGUnlikeMutation" in sent["expr"]
 
 
 def test_send_no_result_is_upstream_broken(monkeypatch):
     def fake_eval(_tid, expr, timeout=30):
-        if "/web/likes/" in expr:
+        if "/api/graphql" in expr:
             return {"sent": True}
         if expr.startswith("window["):
             return None

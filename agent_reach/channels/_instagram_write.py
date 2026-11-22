@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 """Instagram write actions (comment / like / unlike) in the Agent Reach browser.
 
-Reads go through `opencli instagram`; writes replay Instagram's web form API
-inside a logged-in instagram.com page: `POST /api/v1/web/comments/<media_id>/add/`
-and `POST /api/v1/web/likes/<media_id>/like|unlike/`. Auth is the session cookie
-(`credentials:'include'`); CSRF is the `csrftoken` cookie echoed in
-`X-CSRFToken`. A numeric `media_id` or a `/p/`, `/reel/` or `/tv/` URL (or bare
-shortcode) all resolve through the deterministic shortcode↔media_id base64
-alphabet — no lookup request needed.
+Reads go through `opencli instagram`; writes replay Instagram's own GraphQL
+mutations inside a logged-in instagram.com page — `POST /api/graphql` with
+`usePolarisCommentCreateMutation` / `usePolarisLikeMediaXIG{Like,Unlike}Mutation`.
+Instagram moved off the old `/api/v1/web/comments/<id>/add/` REST surface; those
+paths now 404 with a `not-logged-in` shell page even on a live session.
+
+Token params (fb_dtsg, lsd, jazoest, __dyn, __csr, __hsdp, __sjsp...) are minted
+live by `window.require("getAsyncParams")("POST")` — the same envelope trick as
+Facebook (Meta shares the transport stack). `av` (the actor/viewer id) is read
+from `window.require("PolarisViewer").data.fbid`. A numeric `media_id` or a
+`/p/`, `/reel/` or `/tv/` URL (or bare shortcode) resolves through the
+deterministic shortcode↔media_id base64 alphabet — no lookup request needed.
 
 `instagram post` is DESCOPED: a post is `PUT /rupload_igphoto/` then
 `POST /api/v1/media/configure/` — a binary upload pipeline, not a single
@@ -27,9 +32,11 @@ import time
 import urllib.parse
 from collections.abc import Callable
 
+from agent_reach.runtime import query_ids
 from agent_reach.runtime.result import (
     BAD_INPUT,
     NEED_LOGIN,
+    PERSISTED_QUERY_DEAD,
     PLATFORM_BLOCKED,
     RATE_LIMITED,
     UPSTREAM_BROKEN,
@@ -40,12 +47,16 @@ from agent_reach.runtime.result import (
 from ._facebook_write import _eval, _result_key
 
 _IG_HOSTS = ("instagram.com", "instagr.am")
-_APP_ID = "936619743392459"  # web app id IG itself sends on every XHR
 _ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 _SHORTCODE_RE = re.compile(r"^[A-Za-z0-9_-]{5,20}$")
 _MEDIA_ID_RE = re.compile(r"^\d{8,25}$")
 
-# IG JSON `message`/`feedback` text that is the caller's problem vs a soft block.
+# Persisted-query ids (rotate with IG builds; query-ids.json overrides at send).
+_DOC_COMMENT = "39617891021192323"
+_DOC_LIKE = "27182485238052618"
+_DOC_UNLIKE = "27345296031770102"
+
+# IG JSON `message`/`feedback`/`error_summary` text that is the caller's problem.
 _RATE_WORDS = ("please wait", "few minutes", "try again later", "rate")
 # checkpoint/challenge/spam walls are terminal until the operator resolves them —
 # retrying digs the hole deeper, so they are PLATFORM_BLOCKED, not UPSTREAM_BROKEN.
@@ -96,28 +107,48 @@ def resolve_media_id(target: str) -> tuple[str, str]:
     return str(shortcode_to_media_id(code)), code
 
 
+# GraphQL send — same fire-and-poll shape as _facebook_write's _FB_SEND_TEMPLATE,
+# with the actor id coming from PolarisViewer.data.fbid instead of
+# CurrentUserInitialData.USER_ID (which is "0" under Instagram's web bundle).
 _SEND_JS = r"""
 (()=>{try{
+const req=window.require;
+if(!req)return{error:"no_require"};
+const viewer=req("PolarisViewer");
+const av=viewer?.data?.fbid;
+const gp=req("getAsyncParams");
+if(!av||!gp)return{error:"no_tokens",hasViewer:!!av};
+const base=gp("POST")||{};
+if(!base.fb_dtsg||!base.lsd)return{error:"no_tokens",hasViewer:true};
+const vars=__IG_VARS;
+const p=new URLSearchParams();
+for(const k in base)p.set(k,base[k]);
+p.set("av",av);
+p.set("fb_api_req_friendly_name",__IG_FRIENDLY);
+p.set("fb_api_caller_class","RelayModern");
+p.set("doc_id",__IG_DOC);
+p.set("server_timestamps","true");
+p.set("variables",JSON.stringify(vars));
 const KEY=__IG_KEY;
 if(window[KEY+"_sent"])return{sent:true,dup:true};
 window[KEY+"_sent"]=true;
 window[KEY]=null;
-fetch(__IG_PATH,{method:"POST",credentials:"include",
-headers:{"Content-Type":"application/x-www-form-urlencoded","X-CSRFToken":__IG_CSRF,
-"X-Requested-With":"XMLHttpRequest","X-IG-App-ID":__IG_APPID},
-body:__IG_BODY}).then(r=>r.text().then(t=>{
-const out={status:r.status,body:t.slice(0,2000)};
+fetch("/api/graphql",{method:"POST",credentials:"include",
+headers:{"Content-Type":"application/x-www-form-urlencoded"},
+body:p.toString()}).then(r=>r.text().then(t=>{
+const out={status:r.status,body:t.slice(0,3000)};
 let j=null;try{j=JSON.parse(t)}catch(e){}
 if(j&&typeof j==="object"){
 out.parsed=true;
-out.ok=j.status==="ok";
-const c=j.comment||{};
-out.commentId=c.pk?String(c.pk):null;
-out.message=j.message||null;
-out.feedback=(j.feedback_title||j.feedback_message||"")+"";
-out.code=(j.error_type||j.checkpoint_error_type||"")+""+
-["feedback_required","spam","checkpoint_required","challenge_required","require_login"]
-.filter(k=>j[k]===true||j[k]===k).map(k=>" "+k).join("");
+out.ok=!!(j.data&&!j.errors);
+out.errors=(j.errors||[]).map(e=>e.message||String(e)).slice(0,3);
+out.extensions=j.extensions?Object.keys(j.extensions):null;
+const cc=j.data?.xig_comment_create;
+if(cc)out.commentId=cc.comment?.pk?String(cc.comment.pk):null;
+const ml=j.data?.xig_media_like;
+if(ml)out.liked=ml.media?.has_liked===true;
+const ul=j.data?.xig_media_unlike;
+if(ul)out.unliked=ul.media?.has_liked===false;
 }else{out.parsed=false}
 window[KEY]=out;
 })).catch(e=>{window[KEY]={error:String(e)}});
@@ -194,7 +225,7 @@ def _session(target_id: str, deadline: float) -> tuple[str, str]:
 
 
 def classify_ig(out: dict, *, confirmed: Callable[[], bool]) -> None:
-    """Map a page-side `/api/v1/web/*` result onto Reach errors."""
+    """Map a page-side `/api/graphql` result onto Reach errors."""
     status = out.get("status")
     if status == 429:
         raise ReachError(RATE_LIMITED, "Instagram rate-limited the request — slow down before retrying")
@@ -209,16 +240,18 @@ def classify_ig(out: dict, *, confirmed: Callable[[], bool]) -> None:
         raise ReachError(UPSTREAM_BROKEN, f"Unparseable Instagram response (HTTP {status}): {head[:200]}")
     if confirmed():
         return
-    text = " ".join(
-        str(x or "")
-        for x in (
-            out.get("message"),
-            out.get("feedback"),
-            out.get("code"),
-            out.get("body")[:400] if out.get("body") else "",
+    errs = out.get("errors") or []
+    code = str(out.get("code") or "")
+    msg = str(out.get("message") or "")
+    text = " ".join(errs + [code, msg] + ([out.get("body", "")][:400] if out.get("body") else []))
+    lowered = str(text).lower()
+    if status == 404 or "doesn't exist" in lowered or "media not found" in lowered:
+        raise ReachError(BAD_INPUT, f"Instagram media not found or target invalid: {text[:200]}")
+    if "not found" in lowered and ("document" in lowered or "query" in lowered):
+        raise ReachError(
+            PERSISTED_QUERY_DEAD,
+            f"Instagram persisted query id is dead — re-capture doc_id: {errs[0] if errs else text[:120]}",
         )
-    )
-    lowered = text.lower()
     if "require_login" in lowered or "user not logged in" in lowered:
         raise ReachError(NEED_LOGIN, "Instagram rejected the session — log in again in the Agent Reach browser")
     if any(w in lowered for w in _BLOCK_WORDS):
@@ -228,8 +261,6 @@ def classify_ig(out: dict, *, confirmed: Callable[[], bool]) -> None:
         )
     if any(w in lowered for w in _RATE_WORDS):
         raise ReachError(RATE_LIMITED, f"Instagram rate-limited the request: {text[:200]}")
-    if status == 404 or "not found" in lowered or "doesn't exist" in lowered:
-        raise ReachError(BAD_INPUT, f"Instagram media not found or target invalid: {text[:200]}")
     raise ReachError(UPSTREAM_BROKEN, f"Instagram rejected the request: {text[:300]}")
 
 
@@ -247,13 +278,12 @@ def _left(deadline: float, cap: float) -> float:
     return max(1.0, min(deadline - time.monotonic(), cap))
 
 
-def _send_js(path: str, csrf: str, body: str, key: str) -> str:
+def _send_js(vars_obj: dict, friendly_name: str, doc_id: str, key: str) -> str:
     return (
         _SEND_JS.replace("__IG_KEY", json.dumps(key))
-        .replace("__IG_PATH", json.dumps(path))
-        .replace("__IG_CSRF", json.dumps(csrf))
-        .replace("__IG_APPID", json.dumps(_APP_ID))
-        .replace("__IG_BODY", json.dumps(body))
+        .replace("__IG_VARS", json.dumps(vars_obj))
+        .replace("__IG_FRIENDLY", json.dumps(friendly_name))
+        .replace("__IG_DOC", json.dumps(doc_id))
     )
 
 
@@ -279,19 +309,30 @@ def _send(target_id: str, expr: str, *, deadline: float, key: str, label: str) -
     return out
 
 
+def _doc_id(kind: str) -> str:
+    """Persisted-query id for `kind` — query-ids.json overrides the baked default."""
+    defaults = {"comment": _DOC_COMMENT, "like": _DOC_LIKE, "unlike": _DOC_UNLIKE}
+    return query_ids.get("instagram", kind, defaults[kind])
+
+
 def ig_comment(*, target: str, text: str, timeout: float) -> list:
-    """Comment on a post/reel (`/api/v1/web/comments/<media_id>/add/`)."""
+    """Comment on a post/reel (`usePolarisCommentCreateMutation`)."""
     mid, code = resolve_media_id(target)
     body_text = (text or "").strip()
     if not body_text:
         raise ReachError(BAD_INPUT, "comment text is empty")
     deadline, tid = _arm(timeout)
-    csrf, user_id = _session(tid, deadline)
-    body = urllib.parse.urlencode({"comment_text": body_text})
+    _, user_id = _session(tid, deadline)
+    vars_obj = {
+        "data": {"comment_text": body_text, "media_id": mid},
+        "root_connections": [
+            f'client:POLARIS_{mid}:__PolarisPostComments__comments_connection_connection(input:{{"sort_order":"popular"}})'
+        ],
+    }
     key = _result_key("__igCommentResult")
     out = _send(
         tid,
-        _send_js(f"/api/v1/web/comments/{mid}/add/", csrf, body, key),
+        _send_js(vars_obj, "usePolarisCommentCreateMutation", _doc_id("comment"), key),
         deadline=deadline,
         key=key,
         label="Comment",
@@ -318,20 +359,27 @@ def ig_comment(*, target: str, text: str, timeout: float) -> list:
 
 
 def ig_like(*, target: str, unlike: bool, timeout: float) -> list:
-    """Like (`/api/v1/web/likes/<media_id>/like/`) or unlike the same path's `/unlike/`."""
+    """Like (`usePolarisLikeMediaXIGLikeMutation`) or unlike the same target."""
     mid, code = resolve_media_id(target)
     deadline, tid = _arm(timeout)
-    csrf, user_id = _session(tid, deadline)
-    verb = "unlike" if unlike else "like"
+    _, user_id = _session(tid, deadline)
+    vars_obj = {
+        "input": {
+            "actor_id": "__AV__",  # filled by PolarisViewer.data.fbid inside the send JS
+            "client_mutation_id": "1",
+            "media_id": mid,
+        }
+    }
     key = _result_key("__igLikeResult")
-    out = _send(
-        tid,
-        _send_js(f"/api/v1/web/likes/{mid}/{verb}/", csrf, "", key),
-        deadline=deadline,
-        key=key,
-        label=verb.capitalize(),
+    send_expr = (
+        _SEND_JS.replace("__IG_KEY", json.dumps(key))
+        .replace("__IG_VARS", json.dumps(vars_obj).replace('"__AV__"', '" + av + "'))
+        .replace("__IG_FRIENDLY", json.dumps("usePolarisLikeMediaXIGUnlikeMutation" if unlike else "usePolarisLikeMediaXIGLikeMutation"))
+        .replace("__IG_DOC", json.dumps(_doc_id("unlike" if unlike else "like")))
     )
-    classify_ig(out, confirmed=lambda: out.get("ok"))
+    out = _send(tid, send_expr, deadline=deadline, key=key, label="Unlike" if unlike else "Like")
+    want = not unlike
+    classify_ig(out, confirmed=lambda: out.get("ok") and out.get("liked" if want else "unliked"))
     return [
         make_item(
             title=f"https://www.instagram.com/p/{code}/",

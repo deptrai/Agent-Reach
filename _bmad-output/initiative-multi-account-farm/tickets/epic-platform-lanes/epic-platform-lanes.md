@@ -16,7 +16,7 @@ risk: high
 
 ## Description
 
-Nhân write lane sang các platform còn lại theo thứ tự ưu tiên farm đã chốt: **LinkedIn → Reddit → Instagram**. Mỗi lane dùng lại mutation capture pipeline + doc-id config + replay pattern đã chứng minh trên X (epic 12). TikTok xử lý riêng: repo chưa có cả read channel — story đầu là capture spike, khả thi thì build, không thì descope có ghi lý do.
+Nhân write lane sang các platform còn lại theo thứ tự ưu tiên farm đã chốt: **LinkedIn → Reddit → Instagram**. Mỗi lane dùng lại mutation capture pipeline + doc-id config + replay pattern đã chứng minh trên X (epic 12). TikTok xử lý riêng: repo chưa có cả read channel — story đầu là capture spike, khả thi thì build, không thì descope có ghi lý do. Threads (Meta, threads.com) được add giữa build (2026-11-22): cùng pattern — spike capture trước, lane replay giống Instagram (cùng hạ tầng Meta); official Threads API có nhưng cần Meta app review, không hợp farm model.
 
 ## Outcome
 
@@ -26,7 +26,7 @@ Farm post được đa platform theo cùng 1 cơ chế, thêm platform mới = v
 
 - Write actions core (post tối thiểu, reply/comment nếu platform cần) verify live trên designated test account cho từng platform: LinkedIn, Reddit, Instagram — test account + session login sẵn do operator cung cấp (provisioning Out of scope); **story đầu mỗi lane = verify login-state trước khi capture mutation**.
 - Mỗi lane có doc-ids trong config hot-reloadable, capture theo pipeline chuẩn, write ghi registry.
-- TikTok: spike kết luận khả thi → lane được build, hoặc descope ghi rõ lý do trong Notes.
+- TikTok + Threads: spike kết luận khả thi → lane được build, hoặc descope ghi rõ lý do trong Notes.
 
 ## Boundaries
 

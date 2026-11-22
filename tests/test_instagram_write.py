@@ -131,6 +131,8 @@ def test_comment_sends_form_through_stubbed_eval(monkeypatch):
                 "ok": True,
                 "commentId": "18012345678901234",
             }
+        if expr.startswith('location.href'):
+            return None  # view-post navigation eval from _arm
         raise AssertionError(expr[:120])
 
     _stub_arm(monkeypatch)
@@ -154,6 +156,8 @@ def test_like_and_unlike_paths_and_dup_guard(monkeypatch):
             return {"sent": True, "dup": True}  # dedup sentinel short-circuits
         if expr.startswith("window["):
             return {"status": 200, "parsed": True, "ok": True, "liked": True, "unliked": True}
+        if expr.startswith('location.href'):
+            return None  # view-post navigation eval from _arm
         raise AssertionError(expr[:120])
 
     _stub_arm(monkeypatch)
@@ -172,6 +176,8 @@ def test_send_no_result_is_upstream_broken(monkeypatch):
             return {"sent": True}
         if expr.startswith("window["):
             return None
+        if expr.startswith('location.href'):
+            return None  # view-post navigation eval from _arm
         raise AssertionError(expr[:120])
 
     _stub_arm(monkeypatch)

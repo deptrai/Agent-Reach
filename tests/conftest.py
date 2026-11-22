@@ -11,6 +11,10 @@ import pytest
 
 from agent_reach.config import Config
 
+# Write-lane behavior simulation (random delay + per-channel pacing) must not
+# slow the suite — lanes keep it on in production, off under pytest.
+os.environ.setdefault("REACH_SIM", "0")
+
 
 @pytest.fixture(scope="session")
 def bash_executable() -> str:

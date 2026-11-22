@@ -29,3 +29,5 @@ Read when the user asks what can be fetched or how complete a result is. Declare
 | 小宇宙 | 节目页标题、简介 | transcribe 整集转文字；需要用户提供 Groq Key（`agent-reach configure groq-key`） |
 
 登录后的能力表述使用“可启用/尝试上述浏览器动作”，不使用“登录后支持全部评论”。用户跳过登录时交付已有公开证据。
+
+写动作（Facebook/X/Instagram/Reddit）默认先经过行为模拟层再发 mutation：每渠道最小写间隔（`REACH_WRITE_INTERVAL`，默认 20s）、CDP 鼠标/滚轮在场事件、随机延迟（`REACH_SIM_DELAY`，默认 2–8s）。`REACH_SIM=0` 可全关（测试用）。

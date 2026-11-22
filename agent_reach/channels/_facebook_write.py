@@ -178,6 +178,12 @@ def fb_write_target(
     if not target:
         raise ReachError(UPSTREAM_BROKEN, "No facebook.com tab could be opened in the dedicated browser")
     wait_fn(target["id"], left(25))
+    from agent_reach.runtime import behavior
+
+    behavior.humanize("facebook", target["id"])
+    # Sim time (pacing + presence + jitter) must not eat the send's deadline —
+    # a fired-but-unpolled mutation still lands and reports a false failure.
+    deadline = time.monotonic() + timeout
     return deadline, left, target["id"]
 
 

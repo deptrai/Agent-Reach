@@ -264,14 +264,21 @@ def classify_ig(out: dict, *, confirmed: Callable[[], bool]) -> None:
     raise ReachError(UPSTREAM_BROKEN, f"Instagram rejected the request: {text[:300]}")
 
 
-def _arm(timeout: float) -> tuple[float, str]:
+def _arm(timeout: float, *, post_url: str | None = None) -> tuple[float, str]:
     prepare_instagram()
     deadline = time.monotonic() + timeout
     target = _ig_target(create=True)
     if not target:
         raise ReachError(UPSTREAM_BROKEN, "No instagram.com tab could be opened in the dedicated browser")
+    if post_url and target.get("url", "") != post_url:
+        # Navigate to the target post — "viewed the post, then acted" reads
+        # as a natural sequence; acting on a bare home tab does not.
+        _eval(target["id"], f'location.href={json.dumps(post_url)}', 5)
     _wait_ready(target["id"], max(1.0, min(deadline - time.monotonic(), 25)))
-    return deadline, target["id"]
+    from agent_reach.runtime import behavior
+
+    behavior.humanize("instagram", target["id"])
+    return time.monotonic() + timeout, target["id"]
 
 
 def _left(deadline: float, cap: float) -> float:
@@ -321,7 +328,7 @@ def ig_comment(*, target: str, text: str, timeout: float) -> list:
     body_text = (text or "").strip()
     if not body_text:
         raise ReachError(BAD_INPUT, "comment text is empty")
-    deadline, tid = _arm(timeout)
+    deadline, tid = _arm(timeout, post_url=f"https://www.instagram.com/p/{code}/")
     _, user_id = _session(tid, deadline)
     vars_obj = {
         "data": {"comment_text": body_text, "media_id": mid},
@@ -361,7 +368,7 @@ def ig_comment(*, target: str, text: str, timeout: float) -> list:
 def ig_like(*, target: str, unlike: bool, timeout: float) -> list:
     """Like (`usePolarisLikeMediaXIGLikeMutation`) or unlike the same target."""
     mid, code = resolve_media_id(target)
-    deadline, tid = _arm(timeout)
+    deadline, tid = _arm(timeout, post_url=f"https://www.instagram.com/p/{code}/")
     _, user_id = _session(tid, deadline)
     vars_obj = {
         "input": {

@@ -274,7 +274,10 @@ def _arm(timeout: float) -> tuple[float, str]:
     if not target:
         raise ReachError(UPSTREAM_BROKEN, "No reddit.com tab could be opened in the dedicated browser")
     _wait_ready(target["id"], max(1.0, min(deadline - time.monotonic(), 25)))
-    return deadline, target["id"]
+    from agent_reach.runtime import behavior
+
+    behavior.humanize("reddit", target["id"])
+    return time.monotonic() + timeout, target["id"]
 
 
 def _left(deadline: float, cap: float) -> float:

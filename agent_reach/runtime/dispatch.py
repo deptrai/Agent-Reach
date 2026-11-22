@@ -707,6 +707,13 @@ def run_action(
     """
     depth = len(_QUOTA_HOLD.get() or [])
     try:
+        if action_name in WRITE_ACTIONS.get(channel.name, ()):
+            # Write lanes pace + humanize before send (runtime.behavior); the
+            # outer budget needs the same headroom or the envelope can report
+            # TIMEOUT for a mutation that actually landed.
+            from . import behavior
+
+            timeout += behavior.headroom()
         result = _run_action(
             channel, action_name, params, timeout=timeout, only_backend=only_backend
         )

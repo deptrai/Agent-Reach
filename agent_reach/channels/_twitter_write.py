@@ -140,6 +140,11 @@ def x_write_target(
     if not target:
         raise ReachError(UPSTREAM_BROKEN, "No x.com tab could be opened in the dedicated browser")
     wait_fn(target["id"], left(25))
+    from agent_reach.runtime import behavior
+
+    behavior.humanize("twitter", target["id"])
+    # Sim time must not eat the send's deadline (see _facebook_write).
+    deadline = time.monotonic() + timeout
     return deadline, left, target["id"]
 
 

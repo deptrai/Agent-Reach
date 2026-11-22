@@ -89,8 +89,8 @@ def _fake_shardx(calls: dict):
         def __init__(self, profiles_dir=None):
             calls["profiles_dir"] = profiles_dir
 
-        def create_profile(self, template=None):
-            return FakeProfile(template)
+        def create_profile(self, template=None, *, platform=None):
+            return FakeProfile(template or f"random:{platform}")
 
         def open_profile(self, pid):
             return FakeProfile(f"reopened:{pid}")

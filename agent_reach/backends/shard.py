@@ -101,22 +101,40 @@ def _sdk(shardx, profile_dir):
     return shardx.ShardX()
 
 
+# Desktop-only random pick: an Android fingerprint makes sites serve mobile
+# layouts, which breaks DOM-based adapters (opencli read lanes).
+_DESKTOP_PLATFORMS = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
+
+
+def _create_profile(sdk, template: Optional[str]):
+    """Create a fingerprint profile — explicit template, or desktop-only random.
+
+    `create_profile(None)` picks from the whole library including ~50 Android
+    fingerprints; pages then render mobile DOM that opencli adapters cannot
+    parse. Filtering by the host platform keeps fingerprints plausible too.
+    """
+    if template is not None:
+        return sdk.create_profile(template)
+    platform = _DESKTOP_PLATFORMS.get(sys.platform, "Windows")
+    return sdk.create_profile(None, platform=platform)
+
+
 def _profile(sdk, profile_dir, template: Optional[str]):
     """Reopen the frozen fingerprint profile, or create + memoise one.
 
     The profile id is written once to ``<profile_dir>/shardx-profile-id`` so an
     account keeps one fingerprint across container restarts. `template` (env
     REACH_BROWSER_PROFILE) names a bundled fingerprint template; None picks a
-    random one the first time only.
+    desktop-only random one the first time only.
     """
     if not profile_dir:
-        return sdk.create_profile(template)
+        return _create_profile(sdk, template)
     id_file = Path(profile_dir) / "shardx-profile-id"
     if id_file.is_file():
         saved = id_file.read_text(encoding="utf-8").strip()
         if saved:
             return sdk.open_profile(saved)
-    profile = sdk.create_profile(template)
+    profile = _create_profile(sdk, template)
     id_file.parent.mkdir(parents=True, exist_ok=True)
     id_file.write_text(profile.id, encoding="utf-8")
     return profile

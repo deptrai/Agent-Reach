@@ -20,7 +20,7 @@ services:
     environment:
       REACH_ACCOUNT: ${REACH_ACCOUNT:?REACH_ACCOUNT is required}
       REACH_BROWSER_PROXY: ${REACH_BROWSER_PROXY:?REACH_BROWSER_PROXY is required}
-      REACH_BROWSER_PROFILE: ${REACH_BROWSER_PROFILE:-linux-desktop-chrome}
+      REACH_BROWSER_PROFILE: ${REACH_BROWSER_PROFILE:-linux-rtx3060}
       FARM_BOOT_CHECK: ${FARM_BOOT_CHECK:-1}
       FARM_KILLSWITCH: ${FARM_KILLSWITCH:-1}
     labels:                               # fleet manager discovery (story 14.4)

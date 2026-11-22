@@ -321,7 +321,18 @@ WRITE_ACTIONS = {
     },
     "twitter": {"post", "reply", "quote", "thread"},
     "reddit": {"post", "comment"},
+    "instagram": {"comment", "like", "unlike"},
 }
+
+#: Ledger/quota class aliases for write verbs whose own name has no cap —
+#: instagram `like` IS a `react` (DEFAULT_CAPS 200/day), so it records and caps
+#: under the shared class (story 15.6). `unlike` keeps its own uncapped class,
+#: same as facebook's `unreact`.
+_ACTION_CLASS = {("instagram", "like"): "react"}
+
+
+def _write_class(channel_name: str, action_name: str) -> str:
+    return _ACTION_CLASS.get((channel_name, action_name), action_name)
 
 #: Errors that route a twitter write to the xactions HTTP lane instead of
 #: failing the run (story 16.2). Deliberately narrow: RATE_LIMITED and
@@ -563,7 +574,7 @@ def _enforce_write_quota(channel_name: str, action_name: str, slots: int = 1) ->
     account = os.environ.get("REACH_ACCOUNT")
     if not account:
         return
-    cap = _cap_for(action_name)
+    cap = _cap_for(_write_class(channel_name, action_name))
     if cap is None:
         return
     try:
@@ -583,8 +594,9 @@ def _enforce_write_quota(channel_name: str, action_name: str, slots: int = 1) ->
             effective = max(1, int(cap * ramp))
     # The reserve is the real gate: check + insert in one IMMEDIATE transaction,
     # so two processes cannot both slip through a cap of 1.
+    action_class = _write_class(channel_name, action_name)
     try:
-        ids = farm.reserve_slots(account, action_name, slots, effective)
+        ids = farm.reserve_slots(account, action_class, slots, effective)
     except farm.QuotaFull as full:
         detail = (
             f"cap {cap} x ramp {ramp:g} (account age {age_days}d) = {effective}"
@@ -593,7 +605,7 @@ def _enforce_write_quota(channel_name: str, action_name: str, slots: int = 1) ->
         )
         raise ReachError(
             QUOTA_EXCEEDED,
-            f"quota cap exceeded for account {account} action_class {action_name}: "
+            f"quota cap exceeded for account {account} action_class {action_class}: "
             f"{full.count} success in 24h ({detail})",
         ) from None
     except ReachError:
@@ -667,13 +679,14 @@ def _record_farm_write(channel_name: str, action_name: str, result: dict, hold=N
             else:
                 farm.settle_slots(hold, successes=posted, failure=outcome)
             return
+        action_class = _write_class(channel_name, action_name)
         if action_name == "thread" and posted and outcome != "success":
             for _ in range(posted):
-                farm.record_action(account, action_name, "success")
-            farm.record_action(account, action_name, outcome)
+                farm.record_action(account, action_class, "success")
+            farm.record_action(account, action_class, outcome)
             return
         for _ in range(n):
-            farm.record_action(account, action_name, outcome)
+            farm.record_action(account, action_class, outcome)
     except Exception:  # noqa: BLE001 - ledger writes must never break the action
         pass
 

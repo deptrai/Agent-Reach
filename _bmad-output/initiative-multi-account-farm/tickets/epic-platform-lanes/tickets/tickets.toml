@@ -99,6 +99,32 @@ Update docs/contract/skill surface cho các lanes mới thực sự ship; descop
 """
 verify = "Docs khớp capability thật; suite xanh."
 covers = []
-after = [2, 4, 6, 7]
+after = [2, 4, 6, 7, 10]
 hitl = false
 risk = "low"
+
+[[entry]]
+id = 9
+type = "spike"
+title = "Threads session + write capture feasibility"
+description = """
+Spike: Threads (threads.com, Meta) chưa có channel nào trong repo — probe session trên dedicated browser (operator login, không tự login). 3 câu hỏi bắt buộc trả lời trong verdict: (1) session model — Threads login là Instagram-linked identity qua Meta Accounts Center: session threads.com cần login riêng hay reuse được cookies IG? (quyết định `add` onboarding + `NEED_LOGIN` path); (2) capture create-post mutation thật — endpoint + `friendlyName` + vars shape + doc-id có persisted không (private API giống Instagram; official Threads API cần Meta app review → không hợp farm pattern); (3) media attach có replayable không — media upload flow chunked xác suất cao không replayable → descope caption-only ngay từ spike nếu vậy. Khả thi → kế hoạch lane; không → lý do kỹ thuật cụ thể.
+"""
+verify = "Verdict ghi rõ replayable + endpoint/mutation name hay không + lý do."
+covers = ["R2"]
+after = []
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 10
+type = "story"
+title = "Threads post write action"
+description = """
+Implement `agent-reach threads post` theo verdict spike 15.9 (pattern Instagram — cùng hạ tầng Meta). Deliverables: `channels/threads.py` write-only Channel skeleton (session fields theo verdict 15.9), `channels/_threads_write.py` (require_session + `_send_js` CDP replay + `classify_threads` map `PERSISTED_QUERY_DEAD`), `query-ids.json` keys `threads:*`, tests mirror test_instagram_write + sandbox_write_actions entry, docs. Ledger qua contract epic 12.7; live verify trên designated test account.
+"""
+verify = "`threads post \"text\"` ok:true trên test account; post hiện trên threads.com; ledger ghi success. Nếu spike không khả thi → descope ghi rõ lý do."
+covers = ["R2"]
+after = [9]
+hitl = false
+risk = "medium"

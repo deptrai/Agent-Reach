@@ -20,6 +20,7 @@ Read when the user asks what can be fetched or how complete a result is. Declare
 | X/Twitter | 搜索命中的公开单帖；部分官方公开嵌入可返回全文 | 读：search/profile/tweets/thread；写：post/reply/quote/thread（≥2 条文本发回复链），纯文本无媒体，帖子公开可见、无受众选项；单帖可读不代表回复流可读，不保证完整评论树 |
 | 小红书 | 公开列表或索引可能有笔记 ID、作者、标题，空字段不能补猜 | search/read/comments；文字描述、顶级评论及已加载回复；不保证全部评论，不声称理解图片/视频 |
 | Instagram | 部分索引和主页浅层信息；HTML 应用壳不算帖文 | 读：search 搜用户、profile 主页、posts 指定用户帖子描述；写：comment/like/unlike 已 ship（帖子链接或 media id，须登录专用浏览器）；post 已 descope（媒体上传管线 rupload_igphoto+configure 未实现，IG 无纯文本发帖）；不声称理解图片/视频 |
+| Threads | 无读取动作（无 opencli 适配器） | 写：post 已 ship（纯文本 ≤500 字，threads.com session 须登录专用浏览器，1 点击 Meta 账号续登；`POST /api/v1/media/configure_text_only_post/`，非 GraphQL）；无评论/删除动作 |
 | Facebook | 部分索引或 HTML 摘要；摘要可能被截断 | 读：search/profile；写：post/react/unreact/comment/uncomment/post-edit/post-delete/share（post/share 默认 only_me，post-delete 须 --confirm），须登录专用浏览器；无统一详情或评论动作，不把搜索摘要当全文 |
 | LinkedIn | 搜公开职位、读公开 JD | jobs/read 先尝试公开网页；指定 opencli 才直接走站内；不保证所有职位可读 |
 | BOSS | 搜索索引中可能有职位摘要 | search/read 职位列表与 JD；不能根据编码薪资猜数字；详情后备能力依渠道声明 |
@@ -30,4 +31,4 @@ Read when the user asks what can be fetched or how complete a result is. Declare
 
 登录后的能力表述使用“可启用/尝试上述浏览器动作”，不使用“登录后支持全部评论”。用户跳过登录时交付已有公开证据。
 
-写动作（Facebook/X/Instagram/Reddit）默认先经过行为模拟层再发 mutation：每渠道最小写间隔（`REACH_WRITE_INTERVAL`，默认 20s）、CDP 鼠标/滚轮在场事件、随机延迟（`REACH_SIM_DELAY`，默认 2–8s）。`REACH_SIM=0` 可全关（测试用）。
+写动作（Facebook/X/Instagram/Reddit/Threads）默认先经过行为模拟层再发 mutation：每渠道最小写间隔（`REACH_WRITE_INTERVAL`，默认 20s）、CDP 鼠标/滚轮在场事件、随机延迟（`REACH_SIM_DELAY`，默认 2–8s）。`REACH_SIM=0` 可全关（测试用）。

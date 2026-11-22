@@ -50,6 +50,7 @@ dự kiến nâng 256GB + dual CPU = 36C/72T). Ưu tiên **stealth** để giả
   fetch trong dedicated browser: post/reply/quote/thread, text-only; media descoped vì
   X upload qua chunked `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL)
   + Reddit (`channels/_reddit_write.py` — `post`/`comment` replay `POST /api/submit` và
+  + Threads (`channels/_threads_write.py` — `post` REST `configure_text_only_post`, không doc-id)
   `POST /api/comment`, modhash `uh` từ `/api/me.json`; đã đăng ký `WRITE_ACTIONS["reddit"]`.
   Live verify fail: session hiện tại `BAD_CAPTCHA` trên mọi legacy submit — lane chưa post
   được cho đến khi có session không bị challenge).
@@ -89,7 +90,7 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 | # | Việc | Ghi chú |
 |---|---|---|
 | 1 | X write lane: post/reply/quote/thread ✅ (text-only); còn media | Đã ship `_twitter_write.py`: replay `CreateTweet` qua in-page fetch (X không có `window.require` — token mint từ webpack registry). Media descoped: `upload.twitter.com` INIT/APPEND/FINALIZE, không phải GraphQL |
-| 2 | Platform write lanes còn lại | Reddit ✅ code / ⚠️ CAPTCHA-walled; LinkedIn · Instagram · TikTok ⛔ — bảng trạng thái ngay dưới |
+| 2 | Platform write lanes còn lại | Reddit ✅ code / ⚠️ CAPTCHA-walled; Instagram ✅ comment/like/unlike; Threads ✅ post; LinkedIn · TikTok ⛔ — bảng trạng thái ngay dưới |
 | 3 | **Externalize doc-ids/queryIds** ra config/data file | XActions phải patch `endpoint.url` khi X đổi query ID — hardcode trong code = mỗi lần drift là 1 PR. Doc-id nên hot-reloadable (file riêng + `agent-reach doctor` cảnh báo drift) |
 | 4 | Mutation capture pipeline | `docs/fb-mutation-capture.md` đã có — chuẩn hóa cho các platform khác (record → extract persisted query → sinh `_<platform>_vars.json`) |
 
@@ -101,7 +102,8 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 | Facebook | ✅ Shipped | 8 verb: `post`, `react`/`unreact`, `comment`/`uncomment`, `post-edit`, `post-delete`, `share` (`_facebook_write.py`). post/share mặc định only_me; post-delete cần `--confirm` |
 | Reddit | ✅ code / ⚠️ CAPTCHA-walled | `post` + `comment` (`_reddit_write.py`): `POST /api/submit` + `POST /api/comment`, modhash `uh` từ `/api/me.json`, đã trong `WRITE_ACTIONS["reddit"]`. Live verify trên `Objective_Bet_368` fail `BAD_CAPTCHA` mọi legacy submit (r/test, profile, old.reddit.com); `gql.reddit.com` cross-origin từ page cũng fail. Chưa post được cho đến khi có session không bị challenge. Map lỗi: RATELIMIT→`RATE_LIMITED`, không modhash→`NEED_LOGIN`, validation→`BAD_INPUT`, `BAD_CAPTCHA`→`UPSTREAM_BROKEN` |
 | LinkedIn | ⛔ network + login blocked | Spike 15.1: `NEEDS_OPERATOR_LOGIN` và `linkedin.com` `ERR_CONNECTION_RESET` từ host này (Cloudflare edge; x.com thì vào được). Không có write code. Story 15.2 chưa làm — chờ operator |
-| Instagram | ⛔ login + post descoped | Spike 15.5: dedicated browser kẹt CAA account picker, không có `sessionid` → `NEED_LOGIN`. `post` descoped (rupload media). `comment` (`POST /api/v1/web/comments/<id>/add/`) và `like` replayable sau khi login. Story 15.6 chưa làm — chờ operator |
+| Instagram | ✅ comment/like/unlike / post descoped | Story 15.6: `comment`/`like`/`unlike` qua GraphQL `usePolaris*` doc-id (`query-ids.json`), đã trong `WRITE_ACTIONS["instagram"]`. `post` descoped (rupload media) |
+| Threads | ✅ post | Story 15.10: REST `POST /api/v1/media/configure_text_only_post/` (không doc-id); session threads.com riêng (Meta continue-as từ IG). Doc-id delete `useBarcelona*` chưa cần |
 | TikTok | ⛔ login + post descoped | Spike 15.7: guest session (`NEED_LOGIN`). Mint `X-Bogus` đã verify live qua `byted_acrawler.frontierSign`. `like`/`comment` replayable-conditional khi có session. Video `post` descoped (chunked upload) |
 
 ### 4b. Guardrail per-account — ưu tiên cao
@@ -143,7 +145,7 @@ riêng + `REACH_BROWSER_PROXY` riêng + bridge `127.0.0.1:19825` riêng trong ne
 (guardrail trước khi có write) → 8+9 (containerize + fleet) → 6, 10, 11 → 12–14.
 Cập nhật 2026-11-22: mục 1 và 5–14 đã ship. Trạng thái lane từng platform nằm ở bảng
 **Platform write lanes** (mục 4a): Reddit đã có code nhưng CAPTCHA-walled; story 15.2
-(LinkedIn) và 15.6 (Instagram) còn mở, chờ operator.
+(LinkedIn) còn mở, chờ operator (network + login).
 
 ---
 

@@ -109,7 +109,8 @@ agent-reach read https://www.v2ex.com/t/123   # 按链接自动选渠道
 | reddit | 可选 | 搜帖子、读正文、看评论、看版块；写：发帖、评论（文本或链接；legacy 提交目前常被验证码拦住，视会话而定） | 登录 |
 | twitter | 实验 | 搜推文、用户资料、用户推文、读推文串；写：发帖、回复、引用、发串（纯文本，帖子公开可见） | 登录 |
 | facebook | 实验 | 搜索、主页资料、写操作（发帖/点赞/评论/编辑/删除/分享，默认仅自己可见） | 登录 |
-| instagram | 实验 | 搜用户、主页资料、用户帖子 | 登录 |
+| instagram | 实验 | 搜用户、主页资料、用户帖子；写：评论、点赞、取消赞 | 登录 |
+| threads | 实验 | 写：发纯文本帖（≤500 字） | 登录 |
 
 - **默认**：装好就能用；不想要也可以去掉，以后更新不会再加回来。
 - **可选**：说一句"帮我加上 XX"就开启，需要的软件会自动装好。
@@ -181,7 +182,7 @@ flowchart LR
 
 ## 安全性
 
-- **读为主**：只搜索和读取，不私信。写操作仅限 Facebook、X/Twitter 与 Reddit。Facebook：`post`/`react`/`unreact`/`comment`/`uncomment`/`post-edit`/`post-delete`/`share`（只作用你自己的主页和帖子，发帖、分享默认仅自己可见，删除须 `--confirm`）。X/Twitter：`post`/`reply`/`quote`/`thread`（纯文本，帖子公开可见）。Reddit：`post`/`comment`（文本或链接；代码已接上，但 legacy 提交目前常被验证码拦住，视会话而定）。
+- **读为主**：只搜索和读取，不私信。写操作仅限 Facebook、X/Twitter、Reddit、Instagram 与 Threads。Facebook：`post`/`react`/`unreact`/`comment`/`uncomment`/`post-edit`/`post-delete`/`share`（只作用你自己的主页和帖子，发帖、分享默认仅自己可见，删除须 `--confirm`）。X/Twitter：`post`/`reply`/`quote`/`thread`（纯文本，帖子公开可见）。Reddit：`post`/`comment`（文本或链接；代码已接上，但 legacy 提交目前常被验证码拦住，视会话而定）。Instagram：`comment`/`like`/`unlike`。Threads：`post`（纯文本 ≤500 字）。
 - **从不替你登录，也不要你的密码。** 部分平台会复用你电脑上已有的登录（只复制这一个网站，原浏览器不变）；确实需要重新登录时才打开专用窗口，由你本人完成。
 - **专用浏览器只对你这台电脑开放**，别的电脑连不上它。
 - **建议用小号登录。** 复用过来的通常是主账号，而平台可能限制自动访问的账号。想换成小号，跟 Agent 说一声就行。

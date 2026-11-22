@@ -322,6 +322,7 @@ WRITE_ACTIONS = {
     "twitter": {"post", "reply", "quote", "thread"},
     "reddit": {"post", "comment"},
     "instagram": {"comment", "like", "unlike"},
+    "threads": {"post"},
 }
 
 #: Ledger/quota class aliases for write verbs whose own name has no cap —
